@@ -23,7 +23,7 @@ interface AudioMixerProps {
 export const AudioMixer: React.FC<AudioMixerProps> = ({ audioClips = [] }) => {
   return (
     <>
-      {/* Voice Narration Clips (Clean Speech Only, No BGM) */}
+      {/* Voice Narration Clips (Clean Speech Only, No Background Music) */}
       {audioClips.map((clip) => (
         <Sequence
           key={clip.id}
