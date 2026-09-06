@@ -1,0 +1,241 @@
+{
+  "company": "TWG Tea",
+  "role": "Retail Operations Director",
+  "fps": 30,
+  "width": 1920,
+  "height": 1080,
+  "totalFrames": 4035,
+  "totalDurationSec": 134.5,
+  "rawVideoFile": "raw_recording.mp4",
+  "scenes": [
+    {
+      "id": "scene_intro",
+      "type": "intro_card",
+      "title": "TWG Tea",
+      "subtitle": "Retail Operations Director Demo",
+      "startFrame": 0,
+      "durationFrames": 333,
+      "camera": {
+        "typing": {
+          "x": 960,
+          "y": 540,
+          "scale": 1.0
+        },
+        "response": {
+          "x": 960,
+          "y": 540,
+          "scale": 1.0
+        },
+        "overview": {
+          "x": 960,
+          "y": 540,
+          "scale": 1.0
+        }
+      }
+    },
+    {
+      "id": "prompt_1",
+      "type": "browser_screen",
+      "title": "Scene 1: 初期対話と状況把握",
+      "startFrame": 333,
+      "durationFrames": 974,
+      "rawVideoTime": {
+        "startSec": 0.0,
+        "typingEndSec": 10.07,
+        "thinkingEndSec": 44.44,
+        "completeSec": 58.26
+      },
+      "fastForward": {
+        "startFrame": 635,
+        "durationFrames": 257,
+        "factor": 4.0
+      },
+      "camera": {
+        "typing": {
+          "x": 960,
+          "y": 920,
+          "scale": 1.25
+        },
+        "response": {
+          "x": 920.0,
+          "y": 525.0,
+          "scale": 1.1
+        },
+        "overview": {
+          "x": 960,
+          "y": 540,
+          "scale": 1.0
+        }
+      }
+    },
+    {
+      "id": "prompt_3",
+      "type": "browser_screen",
+      "title": "Scene 2: 複合データ分析と不整合検知",
+      "startFrame": 1307,
+      "durationFrames": 881,
+      "rawVideoTime": {
+        "startSec": 58.26,
+        "typingEndSec": 69.65,
+        "thinkingEndSec": 84.28,
+        "completeSec": 98.63
+      },
+      "fastForward": {
+        "startFrame": 1648,
+        "durationFrames": 109,
+        "factor": 4.0
+      },
+      "camera": {
+        "typing": {
+          "x": 960,
+          "y": 920,
+          "scale": 1.25
+        },
+        "response": {
+          "x": 920.0,
+          "y": 525.0,
+          "scale": 1.1
+        },
+        "overview": {
+          "x": 960,
+          "y": 540,
+          "scale": 1.0
+        }
+      }
+    },
+    {
+      "id": "prompt_4",
+      "type": "browser_screen",
+      "title": "Scene 3: 即時アクションとワークフロー承認",
+      "startFrame": 2188,
+      "durationFrames": 1532,
+      "rawVideoTime": {
+        "startSec": 98.63,
+        "typingEndSec": 111.61,
+        "thinkingEndSec": 189.5,
+        "completeSec": 208.14
+      },
+      "fastForward": {
+        "startFrame": 2577,
+        "durationFrames": 584,
+        "factor": 4.0
+      },
+      "camera": {
+        "typing": {
+          "x": 960,
+          "y": 920,
+          "scale": 1.25
+        },
+        "response": {
+          "x": 920.0,
+          "y": 525.0,
+          "scale": 1.1
+        },
+        "overview": {
+          "x": 960,
+          "y": 540,
+          "scale": 1.0
+        }
+      }
+    },
+    {
+      "id": "scene_outro",
+      "type": "outro_card",
+      "title": "Gemini Enterprise for TWG Tea",
+      "subtitle": "Next Step: Explore your custom agents today",
+      "startFrame": 3720,
+      "durationFrames": 315,
+      "camera": {
+        "typing": {
+          "x": 960,
+          "y": 540,
+          "scale": 1.0
+        },
+        "response": {
+          "x": 960,
+          "y": 540,
+          "scale": 1.0
+        },
+        "overview": {
+          "x": 960,
+          "y": 540,
+          "scale": 1.0
+        }
+      }
+    }
+  ],
+  "audioClips": [
+    {
+      "id": "audio_intro",
+      "file": "audio_intro.mp3",
+      "startFrame": 10,
+      "durationFrames": 309
+    },
+    {
+      "id": "audio_prompt_1",
+      "file": "audio_prompt_1.mp3",
+      "startFrame": 901,
+      "durationFrames": 331
+    },
+    {
+      "id": "audio_prompt_3",
+      "file": "audio_prompt_3.mp3",
+      "startFrame": 1767,
+      "durationFrames": 333
+    },
+    {
+      "id": "audio_prompt_4",
+      "file": "audio_prompt_4.mp3",
+      "startFrame": 3170,
+      "durationFrames": 336
+    },
+    {
+      "id": "audio_outro",
+      "file": "audio_outro.mp3",
+      "startFrame": 3730,
+      "durationFrames": 291
+    }
+  ],
+  "subtitles": [
+    {
+      "startFrame": 10,
+      "endFrame": 319,
+      "text": "本日は、TWG Teaのために開発されたGemini Enterpriseの自律型エージェント「Retail Operations Director」の実演をご紹介します。"
+    },
+    {
+      "startFrame": 901,
+      "endFrame": 1069,
+      "text": "まずはエージェントの基本機能と現在のオペレーション状況を確認します。"
+    },
+    {
+      "startFrame": 1069,
+      "endFrame": 1232,
+      "text": "リアルタイムに挨拶カードと利用可能な推奨アクションが提示されます。"
+    },
+    {
+      "startFrame": 1767,
+      "endFrame": 2100,
+      "text": "続いて、BigQueryの注文履歴と外部サプライヤー台帳を突合し、データの不整合や配送遅延の異常値を自律的に検知・可視化します。"
+    },
+    {
+      "startFrame": 3170,
+      "endFrame": 3293,
+      "text": "検知された課題に対し、是正アクションを即座に起票。"
+    },
+    {
+      "startFrame": 3293,
+      "endFrame": 3506,
+      "text": "確認カードからワンクリックで承認を実行し、基幹データベースをリアルタイムに更新します。"
+    },
+    {
+      "startFrame": 3730,
+      "endFrame": 3955,
+      "text": "このように、TWG Teaの業務オペレーションをGemini Enterpriseが強力に加速します。"
+    },
+    {
+      "startFrame": 3955,
+      "endFrame": 4021,
+      "text": "ご清聴ありがとうございました。"
+    }
+  ]
+}

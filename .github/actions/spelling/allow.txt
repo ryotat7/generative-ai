@@ -2376,3 +2376,14 @@ Zscaler
 Zuv
 Zvrm
 ZWSP
+veryfast
+lavfi
+infobars
+MJPEG
+mjpeg
+movflags
+faststart
+anullsrc
+acodec
+libmp
+Offthread
