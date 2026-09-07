@@ -2396,3 +2396,7 @@ atrim
 asetpts
 STARTPTS
 acrossfade
+bgm
+Bgm
+Cmaj
+ilter

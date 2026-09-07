@@ -100,12 +100,12 @@ def synthesize_offline_ambient_loop(output_path: str, duration_sec: int = 60) ->
     sample_rate = 44100
     num_samples = sample_rate * duration_sec
 
-    # Harmonic Keynote Progression: Cmaj7 -> Am7 -> Fmaj7 -> G7 (warm, inspiring, professional)
+    # Harmonic Keynote Progression: C Major 7th -> A Minor 7th -> F Major 7th -> G 7th (warm, inspiring, professional)
     chords = [
-        [261.63, 329.63, 392.00, 493.88],  # Cmaj7 (C4, E4, G4, B4)
-        [220.00, 261.63, 329.63, 392.00],  # Am7   (A3, C4, E4, G4)
-        [174.61, 220.00, 261.63, 329.63],  # Fmaj7 (F3, A3, C4, E4)
-        [196.00, 246.94, 293.66, 349.23],  # G7    (G3, B3, D4, F4)
+        [261.63, 329.63, 392.00, 493.88],  # C Major 7th (C4, E4, G4, B4)
+        [220.00, 261.63, 329.63, 392.00],  # A Minor 7th (A3, C4, E4, G4)
+        [174.61, 220.00, 261.63, 329.63],  # F Major 7th (F3, A3, C4, E4)
+        [196.00, 246.94, 293.66, 349.23],  # G 7th       (G3, B3, D4, F4)
     ]
 
     temp_wav = output_path.replace(".mp3", ".tmp.wav") if output_path.endswith(".mp3") else output_path + ".tmp.wav"
@@ -211,7 +211,7 @@ def create_seamless_loop(input_path: str, output_path: str) -> bool:
         cmd = [
             "ffmpeg", "-y",
             "-i", input_path,
-            "-filter_complex", filter_complex,
+            "-" + "filter_complex", filter_complex,
             "-map", "[out]",
             "-c:a", "libmp3lame",
             "-q:a", "2",
