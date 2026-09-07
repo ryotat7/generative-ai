@@ -86,4 +86,7 @@ export interface VideoManifestProps extends Record<string, unknown> {
   agendaItems?: AgendaItem[];
   enableNarration?: boolean;
   enableSubtitles?: boolean;
+  enableBgm?: boolean;
+  bgmFile?: string;
+  bgmDurationFrames?: number;
 }

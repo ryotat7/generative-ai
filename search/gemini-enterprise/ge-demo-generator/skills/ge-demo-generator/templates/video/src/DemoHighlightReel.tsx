@@ -215,8 +215,15 @@ export const DemoHighlightReel: React.FC<VideoManifestProps> = (props) => {
       {/* 3. Clean Lower-Third Subtitles */}
       {props.enableSubtitles !== false && <Subtitles subtitles={props.subtitles} />}
 
-      {/* 4. Professional Narration Audio Tracks (Speech Only) */}
-      {props.enableNarration !== false && <AudioMixer audioClips={props.audioClips} />}
+      {/* 4. Professional Narration Audio Tracks & Background Music */}
+      {(props.enableNarration !== false || props.enableBgm) && (
+        <AudioMixer
+          audioClips={props.enableNarration !== false ? props.audioClips : []}
+          enableBgm={props.enableBgm}
+          bgmFile={props.bgmFile}
+          bgmDurationFrames={props.bgmDurationFrames}
+        />
+      )}
     </AbsoluteFill>
   );
 };

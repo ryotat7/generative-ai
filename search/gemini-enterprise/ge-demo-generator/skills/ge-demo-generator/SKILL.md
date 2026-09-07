@@ -3,10 +3,10 @@ name: ge-demo-generator
 description: Synthesizes and deploys complete, domain-specific Gemini Enterprise demo environments directly to Google Cloud. Use when the user asks to create an AI agent demo for any customer domain (e.g. 'example.com', 'example.co.jp', 'example.de', 'example.fr' - any company, any industry, any region) or business goal, generate realistic BigQuery/Firestore sample datasets, create external demo files (PDF, Excel, scanned images), stage them in Cloud Storage and upload them to the deploying account's Google Drive, scaffold ADK multi-agent architectures with MCP tools and A2UI cards, deploy to Cloud Run, publish to Gemini Enterprise, and generate 7 structured demo prompts in any language. Confirms the requirements interactively and presents a demo architecture & data model plan (Mermaid ER diagram, external file lineage, target project) for approval before anything is deployed. Also triggered by /ge-demo-generator.
 metadata:
   author: Google Cloud Customer Engineering
-  version: 2.16.0
+  version: 2.17.0
 ---
 
-# GE Demo Generator Skill (v2.16.0)
+# GE Demo Generator Skill (v2.17.0)
 
 Synthesizes production-grade, domain-tailored AI agent demo environments using **Gemini 3.8 Flash** for reasoning and **Gemini 3.1 Flash Image** for visual generation, adhering to a strict **6-step infrastructure dependency graph**, rich **A2UI interactive component streaming**, **Google Workspace OAuth authorization**, **external sample files staged in Cloud Storage and, when the credentials carry the Drive scope, in the deploying account's Google Drive**, **7 structured demo prompts**, **automated browser video recording & Remotion highlight reel delivery to Google Drive**, and **global multilingual localization (i18n/l10n)**.
 
@@ -148,17 +148,35 @@ with a stated default so the user can answer "all defaults" in three words:
 Anything the user has already stated — in the original request or in Phase 1 — is *decided*.
 Re-asking it reads as not having listened.
 
-**Read the target environment** before writing the brief, so its section 5 states facts rather
-than intentions:
+**Zero-Touch Environment, Project & IAM Pre-flight Probe**:
+
+Read and verify the target environment before writing the brief, ensuring zero-touch deployment readiness so the brief's section 5 states verified facts rather than unvalidated assumptions:
 
 ```bash
+# 1. Target Project Synchronization: align project if specified by user
+TARGET_PROJECT="${TARGET_PROJECT:-}"
+CURRENT_PROJECT=$(gcloud config get-value project 2>/dev/null || echo "")
+if [ -n "$TARGET_PROJECT" ] && [ "$CURRENT_PROJECT" != "$TARGET_PROJECT" ]; then
+  gcloud config set project "$TARGET_PROJECT" >/dev/null 2>&1 || true
+fi
+PROJECT_ID=$(gcloud config get-value project 2>/dev/null || echo "")
+
+# 2. Account Verification & Auto-Discovery: probe project access; auto-switch if active account lacks access
 GCP_ACCOUNT=$(gcloud config get-value account 2>/dev/null || echo "Unknown")
-PROJECT_ID=$(gcloud config get-value project)
-PROJECT_NUMBER=$(gcloud projects describe "$PROJECT_ID" --format="value(projectNumber)")
+if ! gcloud projects describe "$PROJECT_ID" >/dev/null 2>&1; then
+  for acc in $(gcloud auth list --format="value(account)" 2>/dev/null); do
+    if gcloud projects describe "$PROJECT_ID" --account="$acc" >/dev/null 2>&1; then
+      gcloud config set account "$acc" >/dev/null 2>&1 || true
+      GCP_ACCOUNT="$acc"
+      break
+    fi
+  done
+fi
+
+PROJECT_NUMBER=$(gcloud projects describe "$PROJECT_ID" --format="value(projectNumber)" 2>/dev/null || echo "")
 REGION=${CLOUD_RUN_REGION:-"asia-northeast1"}
-# Whether the sample documents can reach a Google Drive at all - sections 3 and 5
-# depend on it. The deploy uploads them with this same token, so this one call
-# answers the question exactly as the deploy will.
+
+# 3. Google Drive Scope Pre-flight
 DRIVE_OK=$(curl -s -o /dev/null -w '%{http_code}' \
   -H "Authorization: Bearer $(gcloud auth print-access-token 2>/dev/null)" \
   'https://www.googleapis.com/drive/v3/about?fields=user')
@@ -170,6 +188,44 @@ carrying no Drive scope, which is what a plain `gcloud auth login` gives you) me
 demo will have no Google Drive copy of the sample documents at all**. That is a fact the
 brief has to state, not discover at deploy time — see brief sections 3 and 5. It is also one
 command to fix, so say it now: `gcloud auth login --enable-gdrive-access --no-launch-browser` (using `--no-launch-browser` since an agentic IDE terminal usually has no local browser), then re-read.
+
+#### Deployer IAM Audit & Autonomous Self-Healing Protocol
+To guarantee a seamless zero-touch deployment, probe whether the deploying account `${GCP_ACCOUNT}` possesses the necessary permissions on `${PROJECT_ID}`:
+
+1. **Owner / IAM Admin Auto-Healing**:
+   - Check if `${GCP_ACCOUNT}` is Project Owner, Editor, or has Project IAM Admin on `${PROJECT_ID}`.
+   - If `${GCP_ACCOUNT}` has IAM administrative privileges but lacks specific service roles (or if granular roles are in use), **automatically grant missing deployment roles** before starting deployment:
+```text
+gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+  --member="user:$GCP_ACCOUNT" \
+  --role="roles/run.admin" --condition=None
+
+gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+  --member="user:$GCP_ACCOUNT" \
+  --role="roles/discoveryengine.admin" --condition=None
+
+gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+  --member="user:$GCP_ACCOUNT" \
+  --role="roles/bigquery.admin" --condition=None
+
+gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+  --member="user:$GCP_ACCOUNT" \
+  --role="roles/iam.serviceAccountUser" --condition=None
+```
+
+2. **Non-Admin Permission Denial Handling (Zero-Touch Guidance)**:
+   - If `${GCP_ACCOUNT}` lacks `roles/resourcemanager.projectIamAdmin` or `roles/owner` and `gcloud projects describe` or service checks return `PERMISSION_DENIED`:
+   - **DO NOT** stop with a vague error or ask the user to manually run setup scripts in their terminal.
+   - Present the exact, copy-pasteable command for their Google Cloud Project Administrator:
+```text
+gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+  --member="user:$GCP_ACCOUNT" \
+  --role="roles/owner"
+```
+   - Prompt the user interactively (using `ask_question` if available) to notify their administrator or switch accounts (`gcloud config set account <admin-account>`), then cleanly re-test and proceed with automated deployment.
+
+3. **Capsule / Sandbox Policy Detection**:
+   - If `${PROJECT_ID}` starts with `cpl-*` or `mpl-*` (Google Cloud Capsule or restricted sandbox), inspect whether organizational policy constraints (such as `constraints/run.allowedIngress` or Service Directory restrictions) are active. Warn the user before data generation so expectations match sandbox capabilities.
 
 ### Step 2.2 — Present the Demo Architecture & Data Model Plan
 
@@ -267,6 +323,7 @@ Show what the commands above returned, verbatim, in a fenced block:
 👤 Active User Account : ${GCP_ACCOUNT}
 🏢 Target Project      : ${PROJECT_ID} (${PROJECT_NUMBER})
 🌐 Target Region       : ${REGION}
+🛡️ Deployer IAM Status  : Verified (Owner/Admin) / Auto-healed
 🗂️ Sample File Storage : gs://${PROJECT_ID}-<domain>-<suffix>-docs/
 📁 Google Drive Copy   : <the DRIVE_OK line, below>
 ```
@@ -751,6 +808,34 @@ python3 scripts/verify_and_heal.py
 6. **Layer 6: Discovery Engine DataStores & Engine Binding**: Inspects indexed document count in `ds-<service>-bq` and `ds-<service>-gcs`, auto-restarts table ingestion if 0 documents, and verifies `dataStoreIds` attachment on the Gemini Enterprise Assistant Engine.
 7. **Layer 7: Agent Registry URL & Authorization**: Verifies registered agent URL strictly ends with `/a2a/app`, auto-patches Gemini Enterprise agent card if missing, and verifies Authorization resource formatting (`projects/${PROJECT_NUMBER}/...`). Resolves direct chat link `https://vertexaisearch.cloud.google.com/home/cid/${CONFIG_ID}/r/agent/${AGENT_ID}/session/-`.
 8. **Layer 8: External Files & Google Drive**: Verifies external PDF, Excel, and Scanned Image files staging.
+
+### 🛡️ Autonomous Self-Healing & Zero-Touch Deployment Protocol (MANDATORY INVARIANT)
+
+- **The Zero-Touch Fallback Invariant**:
+  - **NEVER** instruct the user to "manually execute `setup_and_deploy.sh` in your terminal" or "run the shell script by hand" when an authentication error, permission denial, or deployment failure occurs.
+  - As an autonomous pair-programming agent, your objective is to resolve errors in-place and drive the deployment to completion.
+
+- **Automated Root-Cause Remediation Matrix**:
+  1. **IAM Permission Denied (`403 PERMISSION_DENIED`)**:
+     - **Inspect Identity & Privileges**: Determine whether `${GCP_ACCOUNT}` has administrative access (Project Owner or IAM Admin) to grant missing roles.
+     - **Self-Healing Path**: If `${GCP_ACCOUNT}` has admin rights, immediately execute `gcloud projects add-iam-policy-binding` to grant the missing role (e.g. `roles/run.admin`, `roles/discoveryengine.admin`, `roles/bigquery.admin`, or `roles/iam.serviceAccountUser`) and resume the deployment step.
+     - **Service Account Auto-Grant**: If Cloud Run or Discovery Engine reports that `${PROJECT_NUMBER}-compute@developer.gserviceaccount.com` or `service-${PROJECT_NUMBER}@gcp-sa-discoveryengine.iam.gserviceaccount.com` lacks required bindings, auto-grant the specific role directly.
+     - **Non-Admin Guidance**: If the user lacks IAM administration permissions, provide the exact copy-pasteable command for their Project Administrator in a `text` block:
+```text
+gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+  --member="user:$GCP_ACCOUNT" \
+  --role="roles/owner"
+```
+     - Prompt the user interactively (e.g. via `ask_question` or chat) to confirm once the role is granted or to switch to an authorized account (`gcloud config set account <admin-account>`), then seamlessly re-probe and proceed with automated deployment.
+
+  2. **API Enablement & Service Directory**:
+     - If an API call fails with `SERVICE_DISABLED`, immediately enable the required service via `gcloud services enable <service>.googleapis.com` and retry the operation.
+
+  3. **Capsule / Org Policy Constraints (`constraints/run.allowedIngress`)**:
+     - If Cloud Run rejects deployment with an allowed ingress constraint violation, automatically adapt to `--ingress internal` or report the required policy adjustment to the user.
+
+  4. **Drive Scope Absence (`DRIVE_OK != 200`)**:
+     - Verify that Cloud Storage staging (`gs://${PROJECT_ID}-<domain>-<suffix>-docs/`) succeeds. If the user desires Google Drive sync, provide the exact headless re-authentication command (`gcloud auth login --enable-gdrive-access --no-launch-browser`) without blocking or crashing the automated deployment pipeline.
 
 ---
 

@@ -2390,3 +2390,9 @@ Offthread
 cdp
 oop
 BGM
+Fmaj
+asplit
+atrim
+asetpts
+STARTPTS
+acrossfade

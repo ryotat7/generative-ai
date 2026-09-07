@@ -23,6 +23,7 @@ coordinates (zoom/pan), synchronized subtitle tracks, and audio ducking schedule
 import argparse
 import json
 import os
+import subprocess
 import sys
 
 FPS = 30
@@ -31,7 +32,7 @@ OUTRO_DURATION_SEC = 3.0
 FAST_FORWARD_FACTOR = 4.0
 
 
-def build_manifest(actions_path: str, narration_path: str, output_path: str, enable_narration: bool = True, enable_subtitles: bool = True) -> dict:
+def build_manifest(actions_path: str, narration_path: str, output_path: str, enable_narration: bool = True, enable_subtitles: bool = True, enable_bgm: bool = False, bgm_file: str = "bgm.mp3") -> dict:
     """Builds complete Remotion composition props JSON."""
     with open(actions_path, "r", encoding="utf-8") as f:
         actions_data = json.load(f)
@@ -366,7 +367,28 @@ def build_manifest(actions_path: str, narration_path: str, output_path: str, ena
         "agendaItems": agenda_items,
         "enableNarration": enable_narration,
         "enableSubtitles": enable_subtitles,
+        "enableBgm": enable_bgm,
+        "bgmFile": bgm_file,
     }
+
+    if enable_bgm:
+        bgm_candidates = [
+            os.path.join(os.path.dirname(os.path.abspath(output_path)), "public/audio", bgm_file),
+            os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "public/audio", bgm_file),
+        ]
+        for p in bgm_candidates:
+            if os.path.exists(p):
+                try:
+                    probe = subprocess.run(
+                        ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", p],
+                        capture_output=True, text=True
+                    )
+                    dur = float(probe.stdout.strip())
+                    if dur > 0:
+                        props["bgmDurationFrames"] = int(dur * FPS)
+                        break
+                except Exception:
+                    pass
 
     os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
     with open(output_path, "w", encoding="utf-8") as f:
@@ -374,7 +396,7 @@ def build_manifest(actions_path: str, narration_path: str, output_path: str, ena
 
     print(f"🎬 Video manifest created: {output_path}")
     print(f"   Total Composition Duration: {total_duration_sec}s ({current_frame} frames @ {FPS}fps)")
-    print(f"   Scenes: {len(timeline_scenes)} | Audio Clips: {len(audio_clips)} | Subtitles: {len(all_subtitles)}")
+    print(f"   Scenes: {len(timeline_scenes)} | Audio Clips: {len(audio_clips)} | Subtitles: {len(all_subtitles)} | BGM: {enable_bgm}")
     return props
 
 
@@ -385,6 +407,8 @@ def main():
     parser.add_argument("--output", default="./output/video_props.json", help="Path to write video_props.json")
     parser.add_argument("--no-narration", action="store_true", help="Disable voice narration audio tracks")
     parser.add_argument("--no-subtitles", action="store_true", help="Disable subtitle overlays")
+    parser.add_argument("--enable-bgm", action="store_true", help="Enable ambient background music track")
+    parser.add_argument("--bgm-file", default="bgm.mp3", help="Background music audio filename")
     args = parser.parse_args()
 
     build_manifest(
@@ -392,7 +416,9 @@ def main():
         args.narration,
         args.output,
         enable_narration=not args.no_narration,
-        enable_subtitles=not args.no_subtitles
+        enable_subtitles=not args.no_subtitles,
+        enable_bgm=args.enable_bgm,
+        bgm_file=args.bgm_file
     )
 
 
