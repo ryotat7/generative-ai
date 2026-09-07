@@ -22,6 +22,7 @@ export interface SubtitleItem {
   startFrame: number;
   endFrame: number;
   text: string;
+  position?: "top" | "bottom";
 }
 
 export interface AudioClip {
@@ -33,7 +34,7 @@ export interface AudioClip {
 
 export interface SceneConfig {
   id: string;
-  type: "intro_card" | "browser_screen" | "outro_card";
+  type: "intro_card" | "agenda_card" | "browser_screen" | "outro_card";
   title: string;
   subtitle?: string;
   startFrame: number;
@@ -52,8 +53,22 @@ export interface SceneConfig {
   camera?: {
     typing?: CameraTarget;
     response?: CameraTarget;
+    button?: CameraTarget;
     overview?: CameraTarget;
   };
+  actionClick?: {
+    t_click: number;
+    x: number;
+    y: number;
+    button_label: string;
+  };
+}
+
+export interface AgendaItem {
+  number: number;
+  title: string;
+  subtitle: string;
+  icon: string;
 }
 
 export interface VideoManifestProps extends Record<string, unknown> {
@@ -68,4 +83,7 @@ export interface VideoManifestProps extends Record<string, unknown> {
   scenes: SceneConfig[];
   audioClips: AudioClip[];
   subtitles: SubtitleItem[];
+  agendaItems?: AgendaItem[];
+  enableNarration?: boolean;
+  enableSubtitles?: boolean;
 }

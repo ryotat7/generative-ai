@@ -14,31 +14,66 @@
 
 export const THEME = {
   colors: {
-    bgGradientStart: "#0B0F19",
-    bgGradientMid: "#111827",
-    bgGradientEnd: "#1E1B4B",
-    primaryAccent: "#6366F1",
-    primaryGlow: "rgba(99, 102, 241, 0.35)",
-    cardBg: "rgba(15, 23, 42, 0.85)",
-    textPrimary: "#F8FAFC",
-    textSecondary: "#94A3B8",
-    borderSubtle: "rgba(255, 255, 255, 0.12)",
-    speedBadgeBg: "rgba(245, 158, 11, 0.2)",
-    speedBadgeText: "#FCD34D",
-    subtitleBg: "rgba(15, 23, 42, 0.92)",
-    subtitleBorder: "rgba(99, 102, 241, 0.4)",
+    // Google Cloud Brand Colors
+    googleBlue: "#1A73E8",
+    googleBlueLight: "#4285F4",
+    googleRed: "#EA4335",
+    googleYellow: "#FBBC04",
+    googleGreen: "#34A853",
+
+    // Google Cloud Surface & Canvas
+    canvasBg: "#FFFFFF",
+    surfaceNeutral: "#F8F9FA",
+    surfaceSubtle: "#F1F3F4",
+    surfaceDark: "rgba(32, 33, 36, 0.88)",
+    surfaceDarkElevated: "rgba(32, 33, 36, 0.95)",
+
+    // Google Cloud Typography
+    textPrimary: "#202124",
+    textSecondary: "#5F6368",
+    textTertiary: "#80868B",
+    textInverse: "#FFFFFF",
+    textInverseSubtle: "#BDC1C6",
+
+    // Borders & Accents
+    borderSubtle: "#DADCE0",
+    borderLight: "#E8EAED",
+    borderDark: "rgba(255, 255, 255, 0.12)",
+
+    // Badges & Highlights
+    chipBg: "#E8F0FE",
+    chipBorder: "#D2E3FC",
+    chipText: "#1A73E8",
+
+    // Fast Forward Badge
+    speedBadgeBg: "rgba(26, 115, 232, 0.12)",
+    speedBadgeBorder: "rgba(66, 133, 244, 0.35)",
+    speedBadgeText: "#1A73E8",
+
+    // Subtitles
+    subtitleBg: "rgba(32, 33, 36, 0.88)",
+    subtitleBorder: "rgba(255, 255, 255, 0.12)",
     subtitleText: "#FFFFFF",
+
+    // Legacy compat aliases
+    primaryAccent: "#1A73E8",
+    primaryGlow: "rgba(66, 133, 244, 0.35)",
+    cardBg: "rgba(255, 255, 255, 0.95)",
+
+    // macOS Traffic Lights
     chromeTrafficRed: "#FF5F56",
     chromeTrafficYellow: "#FFBD2E",
     chromeTrafficGreen: "#27C93F",
   },
   fonts: {
     heading: "'Google Sans', 'Inter', -apple-system, sans-serif",
-    body: "'Roboto', 'Segoe UI', -apple-system, sans-serif",
-    mono: "'Fira Code', 'Roboto Mono', monospace",
+    body: "'Roboto', 'Noto Sans JP', -apple-system, sans-serif",
+    mono: "'Roboto Mono', 'Fira Code', monospace",
   },
   shadows: {
-    browserWindow: "0 25px 65px -12px rgba(0, 0, 0, 0.65), 0 0 45px rgba(99, 102, 241, 0.15)",
-    subtitles: "0 10px 30px rgba(0, 0, 0, 0.7)",
+    browserWindow: "0 20px 50px rgba(60, 64, 67, 0.15), 0 4px 12px rgba(60, 64, 67, 0.08)",
+    card: "0 1px 3px rgba(60, 64, 67, 0.12), 0 1px 2px rgba(60, 64, 67, 0.08)",
+    floatingPill: "0 4px 16px rgba(0, 0, 0, 0.28)",
+    subtitles: "0 8px 32px rgba(0, 0, 0, 0.35)",
   }
 };

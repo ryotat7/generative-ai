@@ -18,7 +18,8 @@ import { AudioMixer } from "./components/AudioMixer";
 import { DynamicCamera } from "./components/DynamicCamera";
 import { FastForwardIndicator } from "./components/FastForwardIndicator";
 import { Subtitles } from "./components/Subtitles";
-import { IntroCard, OutroCard, TitleBanner } from "./components/TitleCard";
+import { ActiveScenarioBadge } from "./components/ActiveScenarioBadge";
+import { IntroCard, AgendaCard, OutroCard, TitleBanner } from "./components/TitleCard";
 import { VideoManifestProps } from "./types";
 
 export const DemoHighlightReel: React.FC<VideoManifestProps> = (props) => {
@@ -41,6 +42,18 @@ export const DemoHighlightReel: React.FC<VideoManifestProps> = (props) => {
               durationInFrames={sc.durationFrames}
             >
               <IntroCard company={props.company} role={props.role} />
+            </Sequence>
+          );
+        }
+
+        if (sc.type === "agenda_card") {
+          return (
+            <Sequence
+              key={sc.id}
+              from={sc.startFrame}
+              durationInFrames={sc.durationFrames}
+            >
+              <AgendaCard company={props.company} role={props.role} items={props.agendaItems} />
             </Sequence>
           );
         }
@@ -73,8 +86,33 @@ export const DemoHighlightReel: React.FC<VideoManifestProps> = (props) => {
           const respFrames = Math.max(1, sc.durationFrames - (typingFrames + ffFrames));
 
           const cameraOverview = sc.camera?.overview || { x: 960, y: 540, scale: 1.0 };
-          const cameraTyping = sc.camera?.typing || { x: 960, y: 920, scale: 1.25 };
+          const cameraTyping = sc.camera?.typing || { x: 960, y: 920, scale: 1.50 };
           const cameraResponse = sc.camera?.response || { x: 960, y: 540, scale: 1.10 };
+          const cameraButton = sc.camera?.button;
+          const actionClick = sc.actionClick;
+
+          // Build dynamic camera keyframes for Segment 3 when an action button is clicked
+          let responseKeyframes: Array<{ frame: number; x: number; y: number; scale: number }> | undefined;
+          if (cameraButton && actionClick && typeof actionClick.t_click === "number") {
+            const clickOffsetSec = actionClick.t_click - raw.thinkingEndSec;
+            const clickFrame = Math.round(clickOffsetSec * fps);
+            const zoomInStart = Math.max(15, clickFrame - 45);
+            const zoomInPeak = zoomInStart + 18;
+            const zoomOutStart = Math.min(respFrames - 25, clickFrame + 60);
+            const zoomOutEnd = Math.min(respFrames, zoomOutStart + 18);
+
+            if (zoomInPeak < zoomOutStart && zoomOutStart < respFrames) {
+              responseKeyframes = [
+                { frame: 0, x: 960, y: 540, scale: 1.0 },
+                { frame: 18, x: cameraResponse.x, y: cameraResponse.y, scale: cameraResponse.scale },
+                { frame: zoomInStart, x: cameraResponse.x, y: cameraResponse.y, scale: cameraResponse.scale },
+                { frame: zoomInPeak, x: cameraButton.x, y: cameraButton.y, scale: cameraButton.scale },
+                { frame: zoomOutStart, x: cameraButton.x, y: cameraButton.y, scale: cameraButton.scale },
+                { frame: zoomOutEnd, x: cameraResponse.x, y: cameraResponse.y, scale: cameraResponse.scale },
+                { frame: respFrames, x: cameraResponse.x, y: cameraResponse.y, scale: cameraResponse.scale },
+              ];
+            }
+          }
 
           return (
             <Sequence
@@ -82,7 +120,7 @@ export const DemoHighlightReel: React.FC<VideoManifestProps> = (props) => {
               from={sc.startFrame}
               durationInFrames={sc.durationFrames}
             >
-              {/* Segment 1: Typing at 1x real speed with prompt input close-up */}
+              {/* Segment 1: Typing at 1x real speed with 1.5x prompt input close-up */}
               <Sequence from={0} durationInFrames={typingFrames}>
                 <DynamicCamera
                   target={cameraTyping}
@@ -104,7 +142,7 @@ export const DemoHighlightReel: React.FC<VideoManifestProps> = (props) => {
               <Sequence from={typingFrames} durationInFrames={ffFrames}>
                 <DynamicCamera
                   target={cameraOverview}
-                  initialScale={1.25}
+                  initialScale={1.50}
                   zoomStartFrame={0}
                   zoomDurationFrames={Math.min(12, Math.round(ffFrames * 0.4))}
                 >
@@ -119,18 +157,19 @@ export const DemoHighlightReel: React.FC<VideoManifestProps> = (props) => {
                 <FastForwardIndicator factor={ffFactor} />
               </Sequence>
 
-              {/* Segment 3: Response inspection and narration at 1x with subtle zoom */}
+              {/* Segment 3: Response inspection and narration at 1x with subtle zoom & button zoom */}
               <Sequence from={typingFrames + ffFrames} durationInFrames={respFrames}>
                 <DynamicCamera
                   target={cameraResponse}
                   initialScale={1.0}
                   zoomStartFrame={0}
                   zoomDurationFrames={Math.min(20, Math.round(respFrames * 0.2))}
+                  keyframes={responseKeyframes}
                 >
                   <OffthreadVideo
                     src={staticFile(`recordings/${props.rawVideoFile}`)}
                     startFrom={Math.round(raw.thinkingEndSec * fps)}
-                    endAt={Math.round(raw.completeSec * fps)}
+                    endAt={Math.round(Math.max(raw.completeSec, raw.thinkingEndSec + (respFrames / fps) + 2.0) * fps)}
                     playbackRate={1}
                     style={{ width: "100%", height: "100%", objectFit: "cover" }}
                   />
@@ -144,9 +183,9 @@ export const DemoHighlightReel: React.FC<VideoManifestProps> = (props) => {
       })}
 
       {/* 2. Global Title Banner (First 1.5s of Scene 1, right after intro) */}
-      {props.scenes.find((s) => s.type === "browser_screen") && (
+      {props.scenes.filter((s) => s.type === "browser_screen").length > 0 && (
         <Sequence
-          from={props.scenes.find((s) => s.type === "browser_screen")!.startFrame}
+          from={props.scenes.filter((s) => s.type === "browser_screen")[0].startFrame}
           durationInFrames={45}
         >
           <TitleBanner
@@ -156,11 +195,28 @@ export const DemoHighlightReel: React.FC<VideoManifestProps> = (props) => {
         </Sequence>
       )}
 
+      {/* 2.5 Active Scenario Pill Badge (Top-Left during browser scenes) */}
+      {props.scenes
+        .filter((s) => s.type === "browser_screen")
+        .map((sc, idx, arr) => (
+          <Sequence
+            key={`badge_${sc.id}`}
+            from={sc.startFrame}
+            durationInFrames={sc.durationFrames}
+          >
+            <ActiveScenarioBadge
+              scenarioNumber={idx + 1}
+              totalScenarios={arr.length}
+              title={sc.title}
+            />
+          </Sequence>
+        ))}
+
       {/* 3. Clean Lower-Third Subtitles */}
-      <Subtitles subtitles={props.subtitles} />
+      {props.enableSubtitles !== false && <Subtitles subtitles={props.subtitles} />}
 
       {/* 4. Professional Narration Audio Tracks (Speech Only) */}
-      <AudioMixer audioClips={props.audioClips} />
+      {props.enableNarration !== false && <AudioMixer audioClips={props.audioClips} />}
     </AbsoluteFill>
   );
 };

@@ -52,20 +52,44 @@ DEFAULT_DEMO_SCENES_EN = [
     {
         "scene_id": "prompt_1",
         "scene_type": "welcome",
-        "title": "Welcome & Operational Briefing",
+        "title": "Scene 1: Welcome & Overview",
         "prompt": "Hello, please provide an operational overview and your core capabilities."
+    },
+    {
+        "scene_id": "prompt_2",
+        "scene_type": "catalog",
+        "title": "Scene 2: Metadata & Catalog Discovery",
+        "prompt": "Please explain the structure of our tea products catalog and boutique store network."
     },
     {
         "scene_id": "prompt_3",
         "scene_type": "analytics_wow",
-        "title": "Cross-Source Analytical Anomaly (BigQuery + Audit)",
+        "title": "Scene 3: Cross-Source Anomaly Detection",
         "prompt": "Cross-reference recent supplier ledger shipments against internal order records to identify anomalies."
     },
     {
         "scene_id": "prompt_4",
         "scene_type": "workflow_action",
-        "title": "Immediate Operational Action & Workflow Approval",
+        "title": "Scene 4: Immediate Workflow Execution",
         "prompt": "Trigger immediate inventory reallocation and request supervisor sign-off."
+    },
+    {
+        "scene_id": "prompt_5",
+        "scene_type": "investigation",
+        "title": "Scene 5: Root Cause Analysis & Quality Inspection",
+        "prompt": "Analyze component telemetry and supplier batch records to identify the root cause of recent quality discrepancies."
+    },
+    {
+        "scene_id": "prompt_6",
+        "scene_type": "simulation",
+        "title": "Scene 6: Predictive Planning & Line Simulation",
+        "prompt": "Simulate tomorrow's assembly line capacity under current supply constraints and rebalance production schedules."
+    },
+    {
+        "scene_id": "prompt_7",
+        "scene_type": "summary",
+        "title": "Scene 7: Operational Summary & Recommendations",
+        "prompt": "Please summarize today's operational actions and provide procurement recommendations for tomorrow."
     }
 ]
 
@@ -74,19 +98,43 @@ DEFAULT_DEMO_SCENES_JA = [
         "scene_id": "prompt_1",
         "scene_type": "welcome",
         "title": "Scene 1: 初期対話と状況把握",
-        "prompt": "こんにちは。あなたのコア機能と本日の業務概要を教えてください。"
+        "prompt": "こんにちは。あなたのコア機能と本日の全店舗オペレーション状況を教えてください。"
+    },
+    {
+        "scene_id": "prompt_2",
+        "scene_type": "catalog",
+        "title": "Scene 2: メタデータと製品カタログ探索",
+        "prompt": "登録されているティー製品カタログ（tea_products）と店舗一覧（boutique_stores）の構成を教えてください。"
     },
     {
         "scene_id": "prompt_3",
         "scene_type": "analytics_wow",
-        "title": "Scene 2: 複合データ分析と不整合検知",
+        "title": "Scene 3: 複合データ分析と不整合検知",
         "prompt": "サプライヤー台帳の配送実績とBigQueryの注文履歴を突合し、データの不整合や配送遅延の異常値を抽出してください。"
     },
     {
         "scene_id": "prompt_4",
         "scene_type": "workflow_action",
-        "title": "Scene 3: 即時アクションとワークフロー承認",
+        "title": "Scene 4: 即時アクションとワークフロー承認",
         "prompt": "検出された不整合に対して緊急の在庫再配分アクションを起票し、承認リクエストを提示してください。"
+    },
+    {
+        "scene_id": "prompt_5",
+        "scene_type": "investigation",
+        "title": "Scene 5: 根本原因分析と品質検査",
+        "prompt": "センサーテレメトリとロット別不良率を分析し、品質不整合の根本原因を特定してください。"
+    },
+    {
+        "scene_id": "prompt_6",
+        "scene_type": "simulation",
+        "title": "Scene 6: 生産計画シミュレーションと予測的配分",
+        "prompt": "現在の供給制約下における翌日の製造ライン処理能力をシミュレーションし、最適なスケジュールを再配分してください。"
+    },
+    {
+        "scene_id": "prompt_7",
+        "scene_type": "summary",
+        "title": "Scene 7: 業務サマリーと推奨事項",
+        "prompt": "本日の対応完了サマリーと、明日に向けた発注推奨事項をまとめてください。"
     }
 ]
 
@@ -401,7 +449,8 @@ async def smooth_scroll_response_if_needed(page, dwell_sec: float) -> None:
             const turnRect = lastTurn.getBoundingClientRect();
 
             const topScroll = Math.max(0, scroller.scrollTop + (turnRect.top - scrollerRect.top) - 30);
-            const bottomScroll = Math.min(scroller.scrollHeight - scroller.clientHeight, scroller.scrollTop + (turnRect.bottom - scrollerRect.bottom) + 80);
+            const targetBottomScroll = Math.max(topScroll, scroller.scrollTop + (turnRect.bottom - scrollerRect.bottom) - 30);
+            const bottomScroll = Math.min(scroller.scrollHeight - scroller.clientHeight, targetBottomScroll);
 
             const isTall = turnRect.height > (scroller.clientHeight * 0.75) || (bottomScroll - topScroll) > 80;
             return {
@@ -420,7 +469,7 @@ async def smooth_scroll_response_if_needed(page, dwell_sec: float) -> None:
             bottom_scroll = scroll_info.get("bottomScroll", 0)
             print(f"  📜 Tall response detected (turnHeight={scroll_info.get('turnHeight')}px, top={top_scroll}px -> bottom={bottom_scroll}px). Smooth scrolling full response...")
 
-            # 1. Smoothly scroll up to the top of this response turn
+            # 1. Smoothly scroll up to the top of this response turn and dwell so viewer sees the initial header
             await page.evaluate("""
             (top) => {
                 function findDeepElement(selector, root) {
@@ -446,10 +495,10 @@ async def smooth_scroll_response_if_needed(page, dwell_sec: float) -> None:
                 }
             }
             """, top_scroll)
-            await asyncio.sleep(1.8)
+            await asyncio.sleep(2.5)
 
-            # 2. Smoothly scroll down to bottom over remaining dwell
-            scroll_duration = max(3.5, min(7.0, dwell_sec - 4.5))
+            # 2. Smoothly scroll down across the response narration duration
+            scroll_duration = max(4.0, dwell_sec - 5.5)
             steps = int(scroll_duration * 25)
             for i in range(1, steps + 1):
                 raw_t = i / float(steps)
@@ -482,7 +531,12 @@ async def smooth_scroll_response_if_needed(page, dwell_sec: float) -> None:
                 """, curr_y)
                 await asyncio.sleep(scroll_duration / float(steps))
 
-            await asyncio.sleep(1.5)
+            await asyncio.sleep(2.5)
+            # Dwell remaining time so raw recording completes full dwell duration
+            elapsed_scroll = 2.5 + scroll_duration + 2.5
+            remaining = max(0.0, dwell_sec - elapsed_scroll)
+            if remaining > 0:
+                await asyncio.sleep(remaining)
         else:
             await asyncio.sleep(dwell_sec)
     except Exception as e:
@@ -734,7 +788,7 @@ def generate_mock_recording(outdir: str, prompts: list[str] = None, lang: str = 
                 title = scenes_def[idx]["title"]
             else:
                 scene_id = f"prompt_{idx + 1}"
-                scene_type = "welcome" if idx == 0 else ("analytics_wow" if idx == 1 else "workflow_action")
+                scene_type = "welcome" if idx == 0 else ("catalog" if idx == 1 else ("analytics_wow" if idx == 2 else ("workflow_action" if idx == 3 else "summary")))
                 title = f"Scene {idx + 1}"
 
             # Realistic timeline segments
@@ -1143,9 +1197,10 @@ async def record_session(args) -> dict:
         try:
             # Common input selectors in Gemini Enterprise Web UI
             input_selectors = [
+                "div.ProseMirror",
+                "div[contenteditable='true']",
                 "textarea[placeholder*='Ask']",
                 "textarea[aria-label*='prompt']",
-                "div[contenteditable='true']",
                 "textarea",
                 "input[type='text']"
             ]
@@ -1153,13 +1208,16 @@ async def record_session(args) -> dict:
             # Build list of scenes to execute
             if args.prompts:
                 scenes_to_run = []
+                default_scenes = DEFAULT_DEMO_SCENES_JA if lang.startswith("ja") else DEFAULT_DEMO_SCENES_EN
+                type_archetypes = ["welcome", "catalog", "analytics_wow", "workflow_action", "investigation", "simulation", "summary"]
                 for idx, p in enumerate(args.prompts):
-                    s_id = "prompt_1" if idx == 0 else ("prompt_3" if idx == 1 else ("prompt_4" if idx == 2 else f"prompt_{idx + 1}"))
-                    s_type = "welcome" if idx == 0 else ("analytics_wow" if idx == 1 else ("workflow_action" if idx == 2 else "custom"))
+                    s_id = f"prompt_{idx + 1}"
+                    s_type = type_archetypes[idx] if idx < len(type_archetypes) else "summary"
+                    sc_title = default_scenes[idx]["title"] if idx < len(default_scenes) else f"Scene {idx + 1}"
                     scenes_to_run.append({
                         "scene_id": s_id,
                         "scene_type": s_type,
-                        "title": f"Scene {idx + 1}",
+                        "title": sc_title,
                         "prompt": p
                     })
             else:
@@ -1172,7 +1230,10 @@ async def record_session(args) -> dict:
                     with open(args.narration, "r", encoding="utf-8") as f:
                         narr_data = json.load(f)
                     for sc in narr_data.get("scenes", []):
-                        scene_durations[sc["scene_id"]] = sc.get("duration_sec", 12.0)
+                        if "phases" in sc and "response" in sc["phases"]:
+                            scene_durations[sc["scene_id"]] = sc["phases"]["response"].get("duration_sec", 18.0)
+                        else:
+                            scene_durations[sc["scene_id"]] = sc.get("duration_sec", 18.0)
                 except Exception:
                     pass
 
@@ -1193,6 +1254,9 @@ async def record_session(args) -> dict:
 
                 if active_input:
                     print(f"Typing prompt into {active_input}...")
+                    # Count rating and copy buttons before submission to track new response accurately
+                    prev_rating_count = await page.locator("button[aria-label*='良い回答'], button[aria-label*='Good response'], button[aria-label*='回答を評価'], button[aria-label*='コピー'], button[aria-label*='Copy']").count()
+
                     await natural_type(page, active_input, prompt_text)
                     t_type_end = time.time() - start_time
 
@@ -1203,9 +1267,26 @@ async def record_session(args) -> dict:
                         btn_box = await send_btn.bounding_box()
                         if btn_box:
                             await click_target(page, btn_box["x"] + btn_box["width"] / 2.0, btn_box["y"] + btn_box["height"] / 2.0)
-                        else:
-                            await page.keyboard.press("Enter")
+                        try:
+                            await send_btn.click()
+                        except Exception:
+                            pass
                     else:
+                        await page.keyboard.press("Enter")
+
+                    # Verify if text was submitted; if input still contains text, retry submit
+                    for _ in range(6):
+                        await asyncio.sleep(0.5)
+                        curr_in_el = await page.query_selector(active_input)
+                        if curr_in_el:
+                            curr_val = (await curr_in_el.inner_text()).strip()
+                            if not curr_val:
+                                break
+                        if send_btn and await send_btn.is_visible():
+                            try:
+                                await send_btn.click()
+                            except Exception:
+                                pass
                         await page.keyboard.press("Enter")
 
                     t_submit = time.time() - start_time
@@ -1213,10 +1294,14 @@ async def record_session(args) -> dict:
 
                     print("Waiting for response stream to begin...")
                     t_response_start = None
-                    for _ in range(30):
+                    for _ in range(40):
                         await asyncio.sleep(0.5)
                         stop_btn = await page.query_selector("button[aria-label*='停止'], button[aria-label*='Stop']")
                         if stop_btn and await stop_btn.is_visible():
+                            t_response_start = time.time() - start_time
+                            break
+                        cur_rating_count = await page.locator("button[aria-label*='良い回答'], button[aria-label*='Good response'], button[aria-label*='回答を評価'], button[aria-label*='コピー'], button[aria-label*='Copy']").count()
+                        if cur_rating_count > prev_rating_count:
                             t_response_start = time.time() - start_time
                             break
 
@@ -1224,8 +1309,8 @@ async def record_session(args) -> dict:
                         t_response_start = time.time() - start_time
 
                     print("Waiting for response stream to complete...")
-                    # Wait for streaming to finish: stop button disappears AND rating/copy/send button re-appears
                     stable_done_count = 0
+                    last_text_len = 0
                     for _ in range(480):
                         await asyncio.sleep(0.5)
                         stop_btn = await page.query_selector("button[aria-label*='停止'], button[aria-label*='Stop']")
@@ -1233,28 +1318,98 @@ async def record_session(args) -> dict:
                             stable_done_count = 0
                             continue
 
-                        # When stop button is gone, verify completion indicator
-                        rating_btn = await page.query_selector("button[aria-label*='回答を評価'], button[aria-label*='Good response'], button[aria-label*='コピー'], button[aria-label*='Copy']")
-                        send_btn = await page.query_selector("button[aria-label*='送信'], button[aria-label*='Send']")
+                        # Check if agent requires authorization button
+                        auth_btn_found = await page.evaluate("""
+                        () => {
+                            function findDeep(matcher, root) {
+                                root = root || document.body;
+                                if (!root) return null;
+                                if (matcher(root)) return root;
+                                if (root.shadowRoot) {
+                                    for (const c of root.shadowRoot.children || []) {
+                                        const res = findDeep(matcher, c);
+                                        if (res) return res;
+                                    }
+                                }
+                                for (const c of root.children || []) {
+                                    const res = findDeep(matcher, c);
+                                    if (res) return res;
+                                }
+                                return null;
+                            }
+                            const btn = findDeep(el => (el.tagName === "MD-FILLED-BUTTON" || el.tagName === "BUTTON") && (el.innerText || "").match(/Authorize|承認/i));
+                            if (btn) {
+                                btn.click();
+                                return true;
+                            }
+                            return false;
+                        }
+                        """)
+                        if auth_btn_found:
+                            print("Authorization button detected and clicked. Handling consent...")
+                            await asyncio.sleep(2.0)
+                            for p in page.context.pages:
+                                p_host = urllib.parse.urlparse(p.url).hostname or ""
+                                if p_host == "accounts.google.com" or p_host.endswith(".google.com"):
+                                    try:
+                                        acc = await p.query_selector('div[role="link"]:has-text("@"), [data-email]')
+                                        if acc:
+                                            await acc.click()
+                                            await asyncio.sleep(2.0)
+                                        cont = await p.query_selector('button:has-text("Continue"), button:has-text("次へ")')
+                                        if cont:
+                                            await cont.click()
+                                            await asyncio.sleep(2.0)
+                                        allow = await p.query_selector('button:has-text("Allow"), button:has-text("許可")')
+                                        if allow:
+                                            await allow.click()
+                                            await asyncio.sleep(3.0)
+                                    except Exception as ex:
+                                        print(f"OAuth flow auto-handling: {ex}")
+
+                        cur_rating_count = await page.locator("button[aria-label*='良い回答'], button[aria-label*='Good response'], button[aria-label*='回答を評価'], button[aria-label*='コピー'], button[aria-label*='Copy']").count()
+
+                        # Check text length of the latest response turn
+                        curr_text_len = await page.evaluate("""
+                        () => {
+                            function findDeepAll(matcher, root) {
+                                root = root || document.body;
+                                let res = [];
+                                if (!root) return res;
+                                if (matcher(root)) res.push(root);
+                                if (root.shadowRoot) {
+                                    for (const c of root.shadowRoot.children || []) {
+                                        res = res.concat(findDeepAll(matcher, c));
+                                    }
+                                }
+                                for (const c of root.children || []) {
+                                    res = res.concat(findDeepAll(matcher, c));
+                                }
+                                return res;
+                            }
+                            const turns = findDeepAll(el => el.tagName === "UCS-SUMMARY" || (el.className && typeof el.className === "string" && el.className.includes("message-item")));
+                            if (turns.length === 0) return 0;
+                            return (turns[turns.length - 1].innerText || "").length;
+                        }
+                        """)
+
                         is_ready = False
-                        if rating_btn and await rating_btn.is_visible():
+                        if cur_rating_count > prev_rating_count:
                             is_ready = True
-                        elif send_btn and await send_btn.is_visible():
+                        elif curr_text_len > 20 and curr_text_len == last_text_len and (time.time() - start_time - t_response_start) > 6.0:
                             is_ready = True
+
+                        last_text_len = curr_text_len
 
                         if is_ready:
                             stable_done_count += 1
-                            if stable_done_count >= 3:  # 1.5s consecutive stable completion
+                            if stable_done_count >= 4:  # 2.0s consecutive stable completion
                                 break
                         else:
                             stable_done_count = 0
 
                     t_response_complete = time.time() - start_time
                     print(f"Response completed at t={t_response_complete:.1f}s")
-
-                    # Dwell on the completed response for at least the narration duration
-                    audio_dur = scene_durations.get(scene_id, 14.0)
-                    min_dwell = max(16.0, audio_dur + 4.0) if scene_type == "workflow_action" else max(12.0, audio_dur + 2.0)
 
                     action_entry = {
                         "scene_id": scene_id,
@@ -1270,12 +1425,151 @@ async def record_session(args) -> dict:
                         "focus_rect": {"x": 360, "y": 160, "width": 1120, "height": 730}
                     }
 
+                    # Check if an analysis proposal card with execution button was rendered
+                    # (e.g. "Run this analysis now", "Run this analysis inline", "今すぐこの分析を実行")
+                    analysis_btn_data = await page.evaluate("""
+                    () => {
+                        function findDeep(matcher, root) {
+                            root = root || document.body;
+                            if (!root) return null;
+                            if (matcher(root)) return root;
+                            if (root.shadowRoot) {
+                                for (const c of root.shadowRoot.children || []) {
+                                    const res = findDeep(matcher, c);
+                                    if (res) return res;
+                                }
+                            }
+                            for (const c of root.children || []) {
+                                const res = findDeep(matcher, c);
+                                if (res) return res;
+                            }
+                            return null;
+                        }
+                        const btn = findDeep(el => {
+                            if (el.tagName !== 'BUTTON' && el.tagName !== 'MD-FILLED-BUTTON' && el.tagName !== 'MD-OUTLINED-BUTTON') return false;
+                            const text = (el.innerText || '').trim();
+                            return /Run this analysis (now|inline)|Run analysis|今すぐ(この)?分析を実行|この分析を実行/i.test(text);
+                        });
+                        if (btn) {
+                            const rect = btn.getBoundingClientRect();
+                            return {
+                                text: btn.innerText.trim(),
+                                x: rect.x + rect.width / 2,
+                                y: rect.y + rect.height / 2
+                            };
+                        }
+                        return null;
+                    }
+                    """)
+
+                    if analysis_btn_data:
+                        print(f"Detected analysis execution button: '{analysis_btn_data['text']}'. Clicking immediately to execute analysis...")
+                        btn_x = analysis_btn_data["x"]
+                        btn_y = analysis_btn_data["y"]
+                        await click_target(page, btn_x, btn_y)
+                        t_click = time.time() - start_time
+                        action_entry["action_click"] = {
+                            "t_click": round(t_click, 2),
+                            "button_label": analysis_btn_data["text"],
+                            "x": round(btn_x, 1),
+                            "y": round(btn_y, 1)
+                        }
+                        # Click the button element
+                        await page.evaluate("""
+                        () => {
+                            function findDeep(matcher, root) {
+                                root = root || document.body;
+                                if (!root) return null;
+                                if (matcher(root)) return root;
+                                if (root.shadowRoot) {
+                                    for (const c of root.shadowRoot.children || []) {
+                                        const res = findDeep(matcher, c);
+                                        if (res) return res;
+                                    }
+                                }
+                                for (const c of root.children || []) {
+                                    const res = findDeep(matcher, c);
+                                    if (res) return res;
+                                }
+                                return null;
+                            }
+                            const btn = findDeep(el => {
+                                if (el.tagName !== 'BUTTON' && el.tagName !== 'MD-FILLED-BUTTON' && el.tagName !== 'MD-OUTLINED-BUTTON') return false;
+                                const text = (el.innerText || '').trim();
+                                return /Run this analysis (now|inline)|Run analysis|今すぐ(この)?分析を実行|この分析を実行/i.test(text);
+                            });
+                            if (btn) btn.click();
+                        }
+                        """)
+
+                        # Wait for the actual analysis execution response stream
+                        print("Waiting for actual analysis response stream to begin...")
+                        await asyncio.sleep(1.0)
+                        prev_rating_count = await page.locator("button[aria-label*='良い回答'], button[aria-label*='Good response'], button[aria-label*='回答を評価'], button[aria-label*='コピー'], button[aria-label*='Copy']").count()
+                        t_analysis_start = time.time() - start_time
+                        stable_done_count = 0
+                        last_text_len = 0
+                        for _ in range(480):
+                            await asyncio.sleep(0.5)
+                            stop_btn = await page.query_selector("button[aria-label*='停止'], button[aria-label*='Stop']")
+                            if stop_btn and await stop_btn.is_visible():
+                                stable_done_count = 0
+                                continue
+
+                            cur_rating_count = await page.locator("button[aria-label*='良い回答'], button[aria-label*='Good response'], button[aria-label*='回答を評価'], button[aria-label*='コピー'], button[aria-label*='Copy']").count()
+
+                            curr_text_len = await page.evaluate("""
+                            () => {
+                                function findDeepAll(matcher, root) {
+                                    root = root || document.body;
+                                    let res = [];
+                                    if (!root) return res;
+                                    if (matcher(root)) res.push(root);
+                                    if (root.shadowRoot) {
+                                        for (const c of root.shadowRoot.children || []) {
+                                            res = res.concat(findDeepAll(matcher, c));
+                                        }
+                                    }
+                                    for (const c of root.children || []) {
+                                        res = res.concat(findDeepAll(matcher, c));
+                                    }
+                                    return res;
+                                }
+                                const turns = findDeepAll(el => el.tagName === "UCS-SUMMARY" || (el.className && typeof el.className === "string" && el.className.includes("message-item")));
+                                if (turns.length === 0) return 0;
+                                return (turns[turns.length - 1].innerText || "").length;
+                            }
+                            """)
+
+                            is_ready = False
+                            if cur_rating_count > prev_rating_count:
+                                is_ready = True
+                            elif curr_text_len > 20 and curr_text_len == last_text_len and (time.time() - start_time - t_analysis_start) > 6.0:
+                                is_ready = True
+
+                            last_text_len = curr_text_len
+
+                            if is_ready:
+                                stable_done_count += 1
+                                if stable_done_count >= 4:
+                                    break
+                            else:
+                                stable_done_count = 0
+
+                        t_response_complete = time.time() - start_time
+                        action_entry["t_response_complete"] = round(t_response_complete, 2)
+                        print(f"Analysis execution response completed at t={t_response_complete:.1f}s")
+
+                    # Dwell on the completed response for the narration duration + natural buffer
+                    audio_dur = scene_durations.get(scene_id, 18.0)
+                    min_dwell = max(18.0, audio_dur + 3.0)
+
                     # Smoothly scroll response if tall so full response is visible in video
                     print(f"Dwelling for {min_dwell:.1f}s to record completed response...")
                     await smooth_scroll_response_if_needed(page, min_dwell)
 
-                    # If workflow action, click interactive execution button during dwell
-                    if scene_type == "workflow_action":
+                    # If workflow action, click interactive execution button during dwell (if not already clicked)
+                    if scene_type == "workflow_action" and "action_click" not in action_entry:
                         print("Locating visible action execution button...")
                         await asyncio.sleep(1.0)
                         action_btns = page.locator("button:has-text('承認'), button:has-text('実行'), button:has-text('Approve'), button:has-text('Execute'), button:has-text('Run')")
@@ -1296,12 +1590,18 @@ async def record_session(args) -> dict:
                                 target_x = box["x"] + box["width"] / 2.0
                                 target_y = box["y"] + box["height"] / 2.0
                                 await click_target(page, target_x, target_y)
+                                try:
+                                    await target_btn.click()
+                                except Exception:
+                                    pass
                                 action_entry["action_click"] = {
                                     "t_click": round(t_click, 2),
-                                    "button_label": (await target_btn.inner_text()).strip()
+                                    "button_label": (await target_btn.inner_text()).strip(),
+                                    "x": round(target_x, 1),
+                                    "y": round(target_y, 1),
                                 }
-                                print(f"Clicked action button at t={t_click:.1f}s")
-                                await asyncio.sleep(4.0)
+                                print(f"Clicked action button at t={t_click:.1f}s, pos=({target_x:.1f}, {target_y:.1f})")
+                                await asyncio.sleep(2.0)
 
                     recorded_actions.append(action_entry)
                     await asyncio.sleep(1.0)

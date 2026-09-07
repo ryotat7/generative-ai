@@ -16,11 +16,19 @@ import React from "react";
 import { interpolate, useCurrentFrame } from "remotion";
 import { CameraTarget } from "../types";
 
+export interface CameraKeyframe {
+  frame: number;
+  x: number;
+  y: number;
+  scale: number;
+}
+
 export interface DynamicCameraProps {
   target?: CameraTarget;
   initialScale?: number;
   zoomStartFrame?: number;
   zoomDurationFrames?: number;
+  keyframes?: CameraKeyframe[];
   children: React.ReactNode;
 }
 
@@ -29,9 +37,46 @@ export const DynamicCamera: React.FC<DynamicCameraProps> = ({
   initialScale = 1.0,
   zoomStartFrame = 0,
   zoomDurationFrames = 15,
+  keyframes,
   children,
 }) => {
   const frame = useCurrentFrame();
+
+  if (keyframes && keyframes.length >= 2) {
+    const frames = keyframes.map((k) => k.frame);
+    const scales = keyframes.map((k) => k.scale);
+    const xs = keyframes.map((k) => k.x);
+    const ys = keyframes.map((k) => k.y);
+
+    const scale = interpolate(frame, frames, scales, {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+    });
+    const x = interpolate(frame, frames, xs, {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+    });
+    const y = interpolate(frame, frames, ys, {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+    });
+
+    const originX = `${(x / 1920) * 100}%`;
+    const originY = `${(y / 1080) * 100}%`;
+
+    return (
+      <div
+        style={{
+          width: "100%",
+          height: "100%",
+          transformOrigin: `${originX} ${originY}`,
+          transform: `scale(${scale})`,
+        }}
+      >
+        {children}
+      </div>
+    );
+  }
 
   const targetScale = target?.scale ?? 1.0;
   const targetX = target?.x ?? 960;

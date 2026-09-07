@@ -31,7 +31,7 @@ OUTRO_DURATION_SEC = 3.0
 FAST_FORWARD_FACTOR = 4.0
 
 
-def build_manifest(actions_path: str, narration_path: str, output_path: str) -> dict:
+def build_manifest(actions_path: str, narration_path: str, output_path: str, enable_narration: bool = True, enable_subtitles: bool = True) -> dict:
     """Builds complete Remotion composition props JSON."""
     with open(actions_path, "r", encoding="utf-8") as f:
         actions_data = json.load(f)
@@ -41,6 +41,7 @@ def build_manifest(actions_path: str, narration_path: str, output_path: str) -> 
 
     company = narration_data.get("company", "Enterprise")
     role = narration_data.get("role", "AI Operations Director")
+    lang = narration_data.get("language", "ja-JP")
     raw_video_path = actions_data.get("raw_video_path", "raw_recording.mp4")
 
     # Map narration scenes by scene_id
@@ -84,13 +85,46 @@ def build_manifest(actions_path: str, narration_path: str, output_path: str) -> 
     })
     current_frame += intro_frames
 
+    # 1.5 Agenda Card (Scenario Overview)
+    agenda_narration = narration_by_id.get("agenda")
+    if agenda_narration:
+        agenda_dur_sec = max(3.5, agenda_narration.get("duration_sec", 3.5) + 0.8)
+        agenda_frames = int(agenda_dur_sec * FPS)
+        audio_clips.append({
+            "id": "audio_agenda",
+            "file": agenda_narration["audio_file"],
+            "startFrame": current_frame + 10,
+            "durationFrames": int(agenda_narration["duration_sec"] * FPS)
+        })
+        for sub in agenda_narration.get("subtitles", []):
+            all_subtitles.append({
+                "startFrame": current_frame + 10 + int(sub["start_sec"] * FPS),
+                "endFrame": current_frame + 10 + int(sub["end_sec"] * FPS),
+                "text": sub["text"]
+            })
+
+        timeline_scenes.append({
+            "id": "scene_agenda",
+            "type": "agenda_card",
+            "title": "実演デモシナリオ一覧" if lang.startswith("ja") else "Walkthrough Agenda",
+            "subtitle": f"{company} — {role}",
+            "startFrame": current_frame,
+            "durationFrames": agenda_frames,
+            "camera": {
+                "typing": {"x": 960, "y": 540, "scale": 1.0},
+                "response": {"x": 960, "y": 540, "scale": 1.0},
+                "overview": {"x": 960, "y": 540, "scale": 1.0}
+            }
+        })
+        current_frame += agenda_frames
+
     # 2. Main Recorded Action Scenes (P1, P3, P4)
     actions = actions_data.get("actions", [])
     for idx, act in enumerate(actions):
         scene_id = act.get("scene_id", f"prompt_{idx + 1}")
         scene_narr = narration_by_id.get(scene_id)
         if not scene_narr:
-            content_narration = [s for s in narration_data.get("scenes", []) if s["scene_id"] not in ("intro", "outro")]
+            content_narration = [s for s in narration_data.get("scenes", []) if s["scene_id"] not in ("intro", "outro", "agenda")]
             if idx < len(content_narration):
                 scene_narr = content_narration[idx]
 
@@ -106,26 +140,61 @@ def build_manifest(actions_path: str, narration_path: str, output_path: str) -> 
             t_scene_raw_end = actions_data.get("total_duration_sec", t_resp_comp + 15.0)
 
         # Timeline segments for this scene:
-        # Segment A: Typing (1x real speed)
         dur_typing_sec = max(1.5, t_submit - t_type_start)
-        # Segment B: Thinking / Wait / Generation (Fast-forwarded 4x)
         raw_wait_sec = max(0.5, t_resp_comp - t_submit)
         ff_wait_sec = raw_wait_sec / FAST_FORWARD_FACTOR
-        # Segment C: Response display & narration (1x real speed)
-        dur_resp_sec = max(4.0, t_scene_raw_end - t_resp_comp)
-        if scene_narr and scene_narr.get("duration_sec"):
-            # Ensure enough time for the narration to play comfortably
-            dur_resp_sec = max(dur_resp_sec, scene_narr["duration_sec"] + 1.0)
+        raw_recorded_resp_sec = max(4.0, t_scene_raw_end - t_resp_comp)
 
-        scene_total_sec = dur_typing_sec + ff_wait_sec + dur_resp_sec
-        scene_frames = int(scene_total_sec * FPS)
+        phases = scene_narr.get("phases") if scene_narr else None
+        if phases and "response" in phases:
+            dur_lead_sec = phases["lead"].get("duration_sec", 4.0)
+            dur_think_sec = phases["thinking"].get("duration_sec", 6.0)
+            dur_resp_narr_sec = phases["response"].get("duration_sec", 18.0)
+            dur_resp_sec = max(dur_resp_narr_sec + 3.0, raw_recorded_resp_sec, 16.0)
+        else:
+            dur_resp_sec = max(scene_narr.get("duration_sec", 14.0) + 3.0, raw_recorded_resp_sec, 16.0) if scene_narr else raw_recorded_resp_sec
+
+        typing_frames = int(dur_typing_sec * FPS)
+        ff_frames = int(ff_wait_sec * FPS)
+        resp_frames = int(dur_resp_sec * FPS)
+
+        # Audio scheduling
+        if phases and "response" in phases:
+            lead_start_frame = current_frame
+            lead_dur_frames = int(dur_lead_sec * FPS)
+
+            think_start_frame = max(current_frame + typing_frames, lead_start_frame + lead_dur_frames + 5)
+            think_dur_frames = int(dur_think_sec * FPS)
+
+            resp_start_frame = max(current_frame + typing_frames + ff_frames, think_start_frame + think_dur_frames + 5)
+            resp_dur_frames = int(dur_resp_narr_sec * FPS)
+
+            needed_resp_frames = (resp_start_frame - (current_frame + typing_frames + ff_frames)) + resp_dur_frames + int(2.5 * FPS)
+            if needed_resp_frames > resp_frames:
+                resp_frames = needed_resp_frames
+                dur_resp_sec = resp_frames / FPS
+
+        scene_frames = typing_frames + ff_frames + resp_frames
 
         # Camera focus:
         focus_rect = act.get("focus_rect", {"x": 480, "y": 420, "width": 960, "height": 450})
         center_x = focus_rect["x"] + focus_rect["width"] / 2
         center_y = focus_rect["y"] + focus_rect["height"] / 2
 
-        timeline_scenes.append({
+        camera_dict = {
+            "typing": {"x": 960, "y": 920, "scale": 1.50},
+            "response": {"x": center_x, "y": center_y, "scale": 1.10},
+            "overview": {"x": 960, "y": 540, "scale": 1.0}
+        }
+        action_click = act.get("action_click")
+        if action_click and "x" in action_click and "y" in action_click:
+            camera_dict["button"] = {
+                "x": action_click["x"],
+                "y": action_click["y"],
+                "scale": 1.45
+            }
+
+        scene_item = {
             "id": scene_id,
             "type": "browser_screen",
             "title": act.get("title", f"Scene {idx + 1}"),
@@ -142,16 +211,66 @@ def build_manifest(actions_path: str, narration_path: str, output_path: str) -> 
                 "durationFrames": int(ff_wait_sec * FPS),
                 "factor": FAST_FORWARD_FACTOR
             },
-            "camera": {
-                "typing": {"x": 960, "y": 920, "scale": 1.25},
-                "response": {"x": center_x, "y": center_y, "scale": 1.10},
-                "overview": {"x": 960, "y": 540, "scale": 1.0}
-            }
-        })
+            "camera": camera_dict
+        }
+        if action_click:
+            scene_item["actionClick"] = action_click
 
-        # Add voice narration clip during the response phase
-        if scene_narr:
-            narr_start_frame = current_frame + int((dur_typing_sec + ff_wait_sec + 0.3) * FPS)
+        timeline_scenes.append(scene_item)
+
+        # Add voice narration clips and subtitles
+        if phases and "response" in phases:
+            lead_info = phases["lead"]
+            think_info = phases["thinking"]
+            resp_info = phases["response"]
+
+            if lead_info.get("audio_file"):
+                audio_clips.append({
+                    "id": f"audio_{scene_id}_lead",
+                    "file": lead_info["audio_file"],
+                    "startFrame": lead_start_frame,
+                    "durationFrames": lead_dur_frames
+                })
+                for sub in lead_info.get("subtitles", []):
+                    all_subtitles.append({
+                        "startFrame": lead_start_frame + int(sub["start_sec"] * FPS),
+                        "endFrame": lead_start_frame + int(sub["end_sec"] * FPS),
+                        "text": sub["text"],
+                        "position": "top"
+                    })
+
+            if think_info.get("audio_file"):
+                audio_clips.append({
+                    "id": f"audio_{scene_id}_think",
+                    "file": think_info["audio_file"],
+                    "startFrame": think_start_frame,
+                    "durationFrames": think_dur_frames
+                })
+                for sub in think_info.get("subtitles", []):
+                    all_subtitles.append({
+                        "startFrame": think_start_frame + int(sub["start_sec"] * FPS),
+                        "endFrame": think_start_frame + int(sub["end_sec"] * FPS),
+                        "text": sub["text"],
+                        "position": "bottom"
+                    })
+
+            if resp_info.get("audio_file"):
+                audio_clips.append({
+                    "id": f"audio_{scene_id}_resp",
+                    "file": resp_info["audio_file"],
+                    "startFrame": resp_start_frame,
+                    "durationFrames": resp_dur_frames
+                })
+                for sub in resp_info.get("subtitles", []):
+                    all_subtitles.append({
+                        "startFrame": resp_start_frame + int(sub["start_sec"] * FPS),
+                        "endFrame": resp_start_frame + int(sub["end_sec"] * FPS),
+                        "text": sub["text"],
+                        "position": "bottom"
+                    })
+        elif scene_narr:
+            narr_start_frame = current_frame
+            typing_end_frame = current_frame + int(dur_typing_sec * FPS)
             audio_clips.append({
                 "id": f"audio_{scene_id}",
                 "file": scene_narr["audio_file"],
@@ -159,10 +278,14 @@ def build_manifest(actions_path: str, narration_path: str, output_path: str) -> 
                 "durationFrames": int(scene_narr["duration_sec"] * FPS)
             })
             for sub in scene_narr.get("subtitles", []):
+                sub_start = narr_start_frame + int(sub["start_sec"] * FPS)
+                sub_end = narr_start_frame + int(sub["end_sec"] * FPS)
+                pos = "top" if sub_start < typing_end_frame else "bottom"
                 all_subtitles.append({
-                    "startFrame": narr_start_frame + int(sub["start_sec"] * FPS),
-                    "endFrame": narr_start_frame + int(sub["end_sec"] * FPS),
-                    "text": sub["text"]
+                    "startFrame": sub_start,
+                    "endFrame": sub_end,
+                    "text": sub["text"],
+                    "position": pos
                 })
 
         current_frame += scene_frames
@@ -202,6 +325,32 @@ def build_manifest(actions_path: str, narration_path: str, output_path: str) -> 
 
     total_duration_sec = round(current_frame / FPS, 2)
 
+    # Build dynamic agenda items from actions
+    agenda_items = []
+    icon_map = {
+        "welcome": "💬",
+        "catalog": "📦",
+        "analytics_wow": "📊",
+        "workflow_action": "⚡",
+        "investigation": "🔍",
+        "simulation": "📈",
+        "summary": "📝",
+    }
+    default_icons = ["💬", "📦", "📊", "⚡", "🔍", "📈", "📝"]
+    for idx, act in enumerate(actions):
+        s_type = act.get("scene_type", "")
+        icon = icon_map.get(s_type, default_icons[idx % len(default_icons)])
+        title = act.get("title", f"Scene {idx + 1}")
+        clean_title = title.split(":", 1)[-1].strip() if ":" in title else title
+        prompt_snippet = act.get("prompt_text", "")
+        clean_subtitle = prompt_snippet[:60] + ("..." if len(prompt_snippet) > 60 else "")
+        agenda_items.append({
+            "number": idx + 1,
+            "title": clean_title,
+            "subtitle": clean_subtitle,
+            "icon": icon,
+        })
+
     props = {
         "company": company,
         "role": role,
@@ -214,6 +363,9 @@ def build_manifest(actions_path: str, narration_path: str, output_path: str) -> 
         "scenes": timeline_scenes,
         "audioClips": audio_clips,
         "subtitles": all_subtitles,
+        "agendaItems": agenda_items,
+        "enableNarration": enable_narration,
+        "enableSubtitles": enable_subtitles,
     }
 
     os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
@@ -231,9 +383,17 @@ def main():
     parser.add_argument("--actions", required=True, help="Path to actions.json")
     parser.add_argument("--narration", required=True, help="Path to narration_manifest.json")
     parser.add_argument("--output", default="./output/video_props.json", help="Path to write video_props.json")
+    parser.add_argument("--no-narration", action="store_true", help="Disable voice narration audio tracks")
+    parser.add_argument("--no-subtitles", action="store_true", help="Disable subtitle overlays")
     args = parser.parse_args()
 
-    build_manifest(args.actions, args.narration, args.output)
+    build_manifest(
+        args.actions,
+        args.narration,
+        args.output,
+        enable_narration=not args.no_narration,
+        enable_subtitles=not args.no_subtitles
+    )
 
 
 if __name__ == "__main__":

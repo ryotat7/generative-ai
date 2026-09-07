@@ -42,11 +42,14 @@ export const Subtitles: React.FC<SubtitlesProps> = ({ subtitles = [] }) => {
       )
     : 1;
 
+  const isTop = activeItem.position === "top";
+
   return (
     <div
       style={{
         position: "absolute",
-        bottom: 42,
+        top: isTop ? 48 : undefined,
+        bottom: isTop ? undefined : 42,
         left: "50%",
         transform: "translateX(-50%)",
         display: "flex",
@@ -58,19 +61,19 @@ export const Subtitles: React.FC<SubtitlesProps> = ({ subtitles = [] }) => {
     >
       <div
         style={{
-          background: "rgba(15, 20, 30, 0.72)",
+          background: "rgba(32, 33, 36, 0.90)",
           backdropFilter: "blur(20px) saturate(180%)",
-          border: "1px solid rgba(255, 255, 255, 0.15)",
+          border: "1px solid rgba(255, 255, 255, 0.14)",
           borderRadius: 16,
-          padding: "14px 36px",
+          padding: "12px 32px",
           color: "#FFFFFF",
-          fontSize: 32,
+          fontSize: 29,
           fontWeight: 500,
           fontFamily: "'Google Sans', 'Noto Sans JP', -apple-system, sans-serif",
           textAlign: "center",
           lineHeight: 1.45,
           letterSpacing: "0.02em",
-          boxShadow: "0 8px 32px rgba(0, 0, 0, 0.35)",
+          boxShadow: "0 8px 32px rgba(0, 0, 0, 0.4)",
           textShadow: "0 2px 4px rgba(0, 0, 0, 0.4)",
         }}
       >
