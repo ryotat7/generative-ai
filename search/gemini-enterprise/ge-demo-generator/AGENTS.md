@@ -357,6 +357,16 @@ Dead ends, do not retry: an anchor surface emitted before the card
 card holding a zero-width space is emitted but never drawn, and Gemini
 Enterprise has never been seen to render a component tree with no text in it.
 
+### 2.7 gcloud CLI release track negotiation and fail-soft
+
+**NEVER hardcode non-GA (alpha/beta) gcloud flags or assume uniform host SDK versions.**
+Host environments (developer workstation vs standard Cloud Shell vs CI) run different Google Cloud SDK versions. What works in `beta` on bleeding-edge SDKs (e.g. SDK 583.0+) may only be in `alpha` or missing entirely on older or minimal installations (e.g. SDK <= 582.0).
+
+- Always check the Google Cloud SDK `RELEASE_NOTES` for the minimum version introducing the flag.
+- Implement dynamic capability probing with graceful degradation / fail-soft fallback (probe `beta` -> probe `alpha` -> fall back to standard invocation omitting non-essential flags).
+- Never fail or abort a multi-step, 15-minute resource provisioning workflow on optional governance or cataloging metadata.
+- In pull requests introducing new CLI flags, include probe verification outputs (`gcloud <track> <command> --help`) across target SDK versions.
+
 ## 3. Managed Autonomous Agent (`enableManagedAgent`)
 
 Optional feature (default ON in the UI) that provisions a Pre-GA **Managed

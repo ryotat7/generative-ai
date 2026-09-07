@@ -1086,24 +1086,60 @@ MIN_INSTANCES="${MIN_INSTANCES:-0}"
 # --no-allow-unauthenticated + --ingress internal is the posture the Web UI ships:
 # Gemini Enterprise reaches the service over Google-internal traffic, so nothing
 # needs to be exposed publicly.
-gcloud run deploy "$SERVICE_NAME" \
-  --source . \
-  --project "$PROJECT_ID" \
-  --region "$REGION" \
-  --platform managed \
-  --memory 8Gi \
-  --cpu 2 \
-  --no-cpu-throttling \
-  --cpu-boost \
-  --min-instances "$MIN_INSTANCES" \
-  --max-instances 1 \
-  --timeout 1800 \
-  --no-allow-unauthenticated \
-  --ingress internal \
-  --labels "created-by=adk" \
-  --set-env-vars="$CR_ENV_VARS" \
-  --quiet \
-  $SECRETS_FLAG
+# Detect gcloud release track for Cloud Run deployment with Agent Registry support
+DEPLOY_TRACK="beta"
+ENABLE_AGENT_REGISTRY_FLAGS=true
+if ! gcloud beta run deploy --help 2>/dev/null | head -n 40 | grep -q -- '--functional-type'; then
+  if gcloud alpha run deploy --help 2>/dev/null | head -n 40 | grep -q -- '--functional-type'; then
+    DEPLOY_TRACK="alpha"
+  else
+    DEPLOY_TRACK=""
+    ENABLE_AGENT_REGISTRY_FLAGS=false
+    echo "  ⚠️ Note: Current gcloud does not support --functional-type (requires Google Cloud SDK >= 583.0.0 or alpha component). Deploying without Agent Registry flags."
+  fi
+fi
+
+if [ "$ENABLE_AGENT_REGISTRY_FLAGS" = "true" ]; then
+  gcloud $DEPLOY_TRACK run deploy "$SERVICE_NAME" \
+    --source . \
+    --project "$PROJECT_ID" \
+    --region "$REGION" \
+    --platform managed \
+    --memory 8Gi \
+    --cpu 2 \
+    --no-cpu-throttling \
+    --cpu-boost \
+    --min-instances "$MIN_INSTANCES" \
+    --max-instances 1 \
+    --timeout 1800 \
+    --no-allow-unauthenticated \
+    --ingress internal \
+    --labels "created-by=adk" \
+    --functional-type=agent \
+    --identity-type=agent-identity \
+    --set-env-vars="$CR_ENV_VARS" \
+    --quiet \
+    $SECRETS_FLAG
+else
+  gcloud run deploy "$SERVICE_NAME" \
+    --source . \
+    --project "$PROJECT_ID" \
+    --region "$REGION" \
+    --platform managed \
+    --memory 8Gi \
+    --cpu 2 \
+    --no-cpu-throttling \
+    --cpu-boost \
+    --min-instances "$MIN_INSTANCES" \
+    --max-instances 1 \
+    --timeout 1800 \
+    --no-allow-unauthenticated \
+    --ingress internal \
+    --labels "created-by=adk" \
+    --set-env-vars="$CR_ENV_VARS" \
+    --quiet \
+    $SECRETS_FLAG
+fi
 
 AGENT_URL=$(gcloud run services describe "$SERVICE_NAME" --region="$REGION" --format="value(status.url)" 2>/dev/null || echo "")
 echo "  ✅ Agent Service URL: $AGENT_URL"
