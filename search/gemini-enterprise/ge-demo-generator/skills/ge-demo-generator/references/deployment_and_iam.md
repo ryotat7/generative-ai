@@ -136,7 +136,7 @@ Run service - along with everything else in the `.env` reference below.
 > the whole list in `$CR_ENV_VARS`; run it rather than assembling the flags by hand.
 
 ```bash
-gcloud run deploy "$SERVICE_NAME" \
+gcloud beta run deploy "$SERVICE_NAME" \
   --source . \
   --region "$REGION" \
   --platform managed \
@@ -150,6 +150,8 @@ gcloud run deploy "$SERVICE_NAME" \
   --no-allow-unauthenticated \
   --ingress internal \
   --labels "created-by=adk" \
+  --functional-type=agent \
+  --identity-type=agent-identity \
   --set-env-vars="$CR_ENV_VARS" \
   --quiet \
   $SECRETS_FLAG

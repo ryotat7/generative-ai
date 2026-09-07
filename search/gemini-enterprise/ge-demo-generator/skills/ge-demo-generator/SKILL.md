@@ -3,10 +3,10 @@ name: ge-demo-generator
 description: Synthesizes and deploys complete, domain-specific Gemini Enterprise demo environments directly to Google Cloud. Use when the user asks to create an AI agent demo for any customer domain (e.g. 'example.com', 'example.co.jp', 'example.de', 'example.fr' - any company, any industry, any region) or business goal, generate realistic BigQuery/Firestore sample datasets, create external demo files (PDF, Excel, scanned images), stage them in Cloud Storage and upload them to the deploying account's Google Drive, scaffold ADK multi-agent architectures with MCP tools and A2UI cards, deploy to Cloud Run, publish to Gemini Enterprise, and generate 7 structured demo prompts in any language. Confirms the requirements interactively and presents a demo architecture & data model plan (Mermaid ER diagram, external file lineage, target project) for approval before anything is deployed. Also triggered by /ge-demo-generator.
 metadata:
   author: Google Cloud Customer Engineering
-  version: 2.15.0
+  version: 2.19.0
 ---
 
-# GE Demo Generator Skill (v2.15.0)
+# GE Demo Generator Skill (v2.19.0)
 
 Synthesizes production-grade, domain-tailored AI agent demo environments using **Gemini 3.8 Flash** for reasoning and **Gemini 3.1 Flash Image** for visual generation, adhering to a strict **6-step infrastructure dependency graph**, rich **A2UI interactive component streaming**, **Google Workspace OAuth authorization**, **external sample files staged in Cloud Storage and, when the credentials carry the Drive scope, in the deploying account's Google Drive**, **7 structured demo prompts**, and **global multilingual localization (i18n/l10n)**.
 
@@ -290,7 +290,7 @@ something the agent will do later — nothing after the deploy writes to a Drive
    real switch in the deployed container, so an option discussed here but not written to
    `.env` is a feature the demo will not have.
 
-   **List all nine, every time**, in this order, with the value this deploy will use in the
+   **List all eleven, every time**, in this order, with the value this deploy will use in the
    second column — `✅ true` / `❌ false` / the literal value / `— (unset)`. An option the
    brief leaves out is an option the user cannot ask for: they do not know it exists, and by
    the time the deploy banner mentions it the 15-30 minutes are already spent. The gate is the
@@ -301,6 +301,8 @@ something the agent will do later — nothing after the deploy writes to a Drive
    | Option | This demo | Default | What it buys, and what it costs |
    |---|---|---|---|
    | 🤖 `enableManagedAgent` | `<value>` | **`true`** | Agent Engine Sandbox code execution, asynchronous background delegation (`delegate_autonomous_task`), scheduled tasks and Drive deliverable exports. The delegation prompts in the demo playbook exercise this, which is why it is the one default-on capability. Adds ~8-10 min of provisioning, overlapped with the rest of the deploy. |
+   | 📡 `enableCloudTelemetry` | `<value>` | **`true`** | OpenTelemetry Cloud Trace instrumentation. Fully tracks per-turn LLM token consumption (`input_tokens`, `output_tokens`), latency breakdown waterfall, and tool execution. PII-safe via `NO_CONTENT` (zero chat prompt text transmitted), 0ms warm-turn overhead (async background batching), and free under monthly Cloud Trace quota. Set to `false` to opt out. |
+   | 🛡️ `enableModelArmor` | `<value>` | `false` | Model Armor integration. Enforces prompt injection & jailbreak defense, automatic sensitive data protection (SDP credentials/PII masking), and RAI safety filters. Auto-provisions and binds `ge-demo-default-armor` in `us-central1` if no custom template is specified. |
    | 🔎 `dataExplorationMode` | `<value>` | **`mcp`** | How the agent reads the demo's data. **`mcp`** (default) provisions no search index: the data-asset catalog is already in the agent's system instruction, so a figure question is *one* `execute_sql` call — the four-to-five round trips people blame on "no index" came from the metadata expedition in front of the query, and the mcp routing block overrides exactly that. **`rag`** additionally builds a Discovery Engine index over the BigQuery dataset and the staged files and makes it the read path: lookups and document questions return in one sub-second `search_datastore` call, while computed figures, joins and every write stay on MCP because the index lags the tables. Pick `rag` when the demo turns on documents rather than on numbers, and note it also attaches data stores to the (often shared) Gemini Enterprise app — see `references/datastore_connectors.md`. |
    | 📁 `enableDatastoreFs` | `<value>` | `false` | When `dataExplorationMode=rag`, provisions a semi-structured Discovery Engine DataStore (`ds-${SERVICE_NAME}-fs`) from `FIRESTORE_COLLECTION` via `FirestoreSource` (GCS export staging). Enables semantic search over historical incident tickets, resolved remediation logs, and SOP archives. Note: live task mutations, approvals, and Operations Viewer synchronization continue to use Firestore MCP for sub-100ms real-time state tracking. |
    | 🔑 `enableWorkspaceAuth` | `<value>` | `false` | User-OAuth passthrough — the agent acts as the signed-in user for the Drive handoff and Workspace token plumbing. Commonly wanted, since Workspace is usually available in the target environment, but **not** default-on: some organizations refuse to authorize an OAuth client they have not vetted, and there sign-in fails for every demo user. Confirm the target org permits it before enabling. |
@@ -335,17 +337,23 @@ unset) flips an existing demo either way.
 
 ### § The gate — ask once, then stop
 
-Close the message with a single explicit question, in the demo's language, that (a) names what
-approving will run — synthetic data generation, Google Drive upload, Cloud Run deploy, Gemini
-Enterprise registration (Phases 3-7) — and (b) leaves the door open for late changes:
+Close the message by triggering an interactive approval and option selection modal using the `ask_question` tool (with plain text fallback only if `ask_question` is not supported in the active environment). This allows the user to review all capabilities and toggle any extra features directly:
 
-> Shall I proceed with this design and run the synthetic data generation, Google Drive upload,
-> Cloud Run deployment and Gemini Enterprise registration (Phases 3-7) in one pass? Let me know
-> if you want any option enabled (Google Workspace OAuth, RAG mode, data scale, a warm Cloud
-> Run instance for a live session, …) or any part of the model changed.
+- Call `ask_question` with `is_multi_select: true`:
+  - `question`: "Do you approve this architecture and deployment plan? Select '(Recommended) Proceed with default configuration' to start deployment immediately, or check any additional options you want enabled:" (in the demo's language)
+  - `options`:
+    1. `"(Recommended) Proceed with default configuration (Managed Agent: Enabled, Cloud Trace Telemetry: Enabled, other options: default)"`
+    2. `"🛡️ Enable Model Armor Guardrails (Auto-provisions and binds ge-demo-default-armor in us-central1 for jailbreak defense and PII masking)"`
+    3. `"🔑 Enable Google Workspace OAuth (Drive/Slides/Docs export as signed-in user)"`
+    4. `"🔎 Enable RAG Data Exploration Mode (Build Discovery Engine search index for document & table reads)"`
+    5. `"📁 Enable Firestore DataStore (Semantic search over historical tickets & SOPs in RAG mode)"`
+    6. `"🔥 Enable Warm Instance (Cloud Run min-instances=1 to eliminate cold-start delay)"`
+    7. `"🖥️ Enable Computer Use (Gemini 3.8 Flash Chromium browser automation)"`
+    8. `"📈 Enable Enterprise Data Scale (Grow fact tables to thousands of rows via amplify_data.py)"`
+    9. `"📡 Disable Cloud Trace Telemetry (Opt-out from OpenTelemetry token & latency tracking)"`
 
-One question, not a second round of Step 2.1: everything else was settled before the brief was
-written, and a gate that re-opens five decisions is a gate nobody clears.
+- In non-interactive or headless environments where `ask_question` is unavailable, output the equivalent choices in chat text and pause for user reply.
+- When the user selects options, update `.env` (`ENABLE_MODEL_ARMOR=1`, `ENABLE_WORKSPACE_AUTH=1`, `ENABLE_CLOUD_TELEMETRY=0`, `DATA_EXPLORATION_MODE=rag`, etc.) and deployment flags accordingly before proceeding to Phase 3.
 
 Then **stop and wait**. Do not start Phase 3 in the same turn, and do not treat "looks good" on
 a *previous* message — the scenario choice in Phase 1 or an answer in Step 2.1 — as approval of
@@ -636,7 +644,7 @@ Follow the optimized dependency sequence with local pre-flight checks and fast b
    # complete table and for which variables are applied later, in Step 5.
    MIN_INSTANCES="${MIN_INSTANCES:-0}"   # export MIN_INSTANCES=1 to stay warm for a live demo
                                          # (brief section 6 - it bills while idle, so ask first)
-   gcloud run deploy "$SERVICE_NAME" \
+   gcloud beta run deploy "$SERVICE_NAME" \
      --source . \
      --region "$REGION" \
      --platform managed \
@@ -650,6 +658,8 @@ Follow the optimized dependency sequence with local pre-flight checks and fast b
      --no-allow-unauthenticated \
      --ingress internal \
      --labels "created-by=adk" \
+     --functional-type=agent \
+     --identity-type=agent-identity \
      --set-env-vars="$CR_ENV_VARS" \
      --quiet \
      $SECRETS_FLAG
@@ -872,6 +882,44 @@ The template below is the base progression, before those overrides:
 - **Expected Outcome**: Synthesizes all data sources, produces executive summary infographic, updates records, and logs audit trail.
 - **Watch Point**: (e.g. the closing summary states the before/after cycle time for the instance the whole demo followed)
 ```
+
+---
+
+## Executive AI Governance Showcase (Cloud Trace & Model Armor)
+
+For executive roundtables, enterprise security reviews, and AI governance demonstrations:
+- **Cloud Trace Telemetry & Token Tracking**: Enabled by **default** (`ENABLE_CLOUD_TELEMETRY=1`), providing out-of-the-box observability without requiring extra flags. (To opt out, set `ENABLE_CLOUD_TELEMETRY=0`).
+- **Model Armor Guardrails**: Enabled via `ENABLE_MODEL_ARMOR=1`. If no custom template is specified, the deployment script **automatically provisions and binds a standard generic template** (`ge-demo-default-armor` in `us-central1`) configured with Prompt Injection/Jailbreak defense, Sensitive Data Protection (SDP Basic for PII/API key masking), Malicious URI filtering, and Responsible AI safety filters.
+
+### 1. Key Governance Capabilities
+1. **Full-Stack Traceability & Observability (OpenTelemetry + Cloud Trace)**:
+   - Tracks LLM token usage (input tokens, output tokens, cached tokens) out of the box.
+   - Generates distributed trace spans across the entire request lifecycle (`invocation -> agent_run -> call_llm -> execute_tool`).
+   - Automatically masks message content on the wire (`OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=NO_CONTENT`) to preserve privacy and prevent PII leakage into trace logs.
+2. **Sensitive Data Protection & Guardrails (Model Armor)**:
+   - Native Model Armor integration via `types.ModelArmorConfig`.
+   - Real-time protection against prompt injection, jailbreak attempts, and sensitive data (PII/financial data) exfiltration.
+   - Auditable security logs in Security Command Center (SCC) and Model Armor Console.
+
+### 2. Enabling Governance for Demos
+Telemetry is active automatically. To also activate Model Armor guardrails for a demo:
+
+```bash
+# Enable Model Armor guardrails (automatically creates and attaches ge-demo-default-armor in us-central1)
+ENABLE_MODEL_ARMOR=1
+
+# (Optional) Specify a custom existing Model Armor template instead of the default:
+# MODEL_ARMOR_TEMPLATE="projects/<PROJECT_ID>/locations/<LOCATION>/templates/<TEMPLATE_ID>"
+```
+
+### 3. Live Demonstration Walkthrough
+During an executive presentation:
+1. **Show Live Trace Explorer**:
+   - Open `https://console.cloud.google.com/traces/explorer?project=${PROJECT_ID}`.
+   - Demonstrate request latency breakdown, tool execution durations, and exact Gemini token consumption per turn.
+2. **Demonstrate Guardrails / Model Armor**:
+   - Issue a simulated prompt injection or prompt asking for restricted personal data.
+   - Open `https://console.cloud.google.com/security/model-armor?project=${PROJECT_ID}` to show violation logs and blocked/sanitized execution.
 
 ---
 

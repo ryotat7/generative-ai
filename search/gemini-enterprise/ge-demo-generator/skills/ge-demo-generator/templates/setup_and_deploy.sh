@@ -128,6 +128,16 @@ ENABLE_WORKSPACE_AUTH=$(bool01 "${ENABLE_WORKSPACE_AUTH:-false}")
 # requirements.txt and the Dockerfile; the pre-flight below refuses to deploy
 # a half-configured build.
 ENABLE_COMPUTER_USE=$(bool01 "${ENABLE_COMPUTER_USE:-false}")
+# AI Governance & Telemetry: Cloud Trace & Model Armor
+# Cloud Trace telemetry is default ON (opt-out via ENABLE_CLOUD_TELEMETRY=0) for out-of-the-box observability.
+ENABLE_CLOUD_TELEMETRY=$(bool01 "${ENABLE_CLOUD_TELEMETRY:-true}")
+ENABLE_MODEL_ARMOR=$(bool01 "${ENABLE_MODEL_ARMOR:-false}")
+if [ "$ENABLE_MODEL_ARMOR" = "1" ] && [ -z "${MODEL_ARMOR_TEMPLATE:-}" ]; then
+  MODEL_ARMOR_TEMPLATE="projects/${PROJECT_ID}/locations/us-central1/templates/ge-demo-default-armor"
+fi
+MODEL_ARMOR_TEMPLATE=${MODEL_ARMOR_TEMPLATE:-""}
+MODEL_ARMOR_PROMPT_TEMPLATE=${MODEL_ARMOR_PROMPT_TEMPLATE:-""}
+MODEL_ARMOR_RESPONSE_TEMPLATE=${MODEL_ARMOR_RESPONSE_TEMPLATE:-""}
 # Data exploration mode: how the agent reads the demo's data.
 #
 #   mcp (default) - Knowledge Catalog + SQL only. No Discovery Engine index is
@@ -335,6 +345,7 @@ echo "📡 [0/4] Checking APIs & IAM Permissions (Parallel)..."
     run.googleapis.com \
     cloudbuild.googleapis.com \
     artifactregistry.googleapis.com \
+    agentregistry.googleapis.com \
     aiplatform.googleapis.com \
     cloudscheduler.googleapis.com \
     cloudtasks.googleapis.com \
@@ -363,6 +374,26 @@ echo "📡 [0/4] Checking APIs & IAM Permissions (Parallel)..."
     clouderrorreporting.googleapis.com \
     telemetry.googleapis.com \
     --project="$PROJECT_ID" 2>/dev/null || true
+  if [ "$ENABLE_CLOUD_TELEMETRY" = "1" ]; then
+    gcloud services enable cloudtrace.googleapis.com --project="$PROJECT_ID" 2>/dev/null || true
+  fi
+  if [ "$ENABLE_MODEL_ARMOR" = "1" ] || [ -n "$MODEL_ARMOR_TEMPLATE" ] || [ -n "$MODEL_ARMOR_PROMPT_TEMPLATE" ] || [ -n "$MODEL_ARMOR_RESPONSE_TEMPLATE" ]; then
+    gcloud services enable modelarmor.googleapis.com --project="$PROJECT_ID" 2>/dev/null || true
+    if [ "$ENABLE_MODEL_ARMOR" = "1" ] && [ "$MODEL_ARMOR_TEMPLATE" = "projects/${PROJECT_ID}/locations/us-central1/templates/ge-demo-default-armor" ]; then
+      if ! gcloud model-armor templates describe "ge-demo-default-armor" --location="us-central1" --project="$PROJECT_ID" >/dev/null 2>&1; then
+        echo "🛡️ Provisioning standard generic Model Armor template (ge-demo-default-armor)..."
+        gcloud model-armor templates create "ge-demo-default-armor" \
+          --location="us-central1" \
+          --project="$PROJECT_ID" \
+          --pi-and-jailbreak-filter-settings-enforcement=enabled \
+          --pi-and-jailbreak-filter-settings-confidence-level=medium-and-above \
+          --malicious-uri-filter-settings-enforcement=enabled \
+          --basic-config-filter-enforcement=enabled \
+          --rai-settings-filters='[{"filterType": "hate-speech", "confidenceLevel": "medium-and-above"}, {"filterType": "harassment", "confidenceLevel": "medium-and-above"}, {"filterType": "dangerous", "confidenceLevel": "medium-and-above"}, {"filterType": "sexually-explicit", "confidenceLevel": "medium-and-above"}]' \
+          --quiet >/dev/null 2>&1 || true
+      fi
+    fi
+  fi
 ) &
 PID_APIS=$!
 
@@ -433,13 +464,20 @@ grant_roles_fast() {
 }
 
 (
+  _gov_roles=()
+  if [ "$ENABLE_CLOUD_TELEMETRY" = "1" ]; then
+    _gov_roles+=("roles/cloudtrace.agent")
+  fi
+  if [ "$ENABLE_MODEL_ARMOR" = "1" ] || [ -n "$MODEL_ARMOR_TEMPLATE" ] || [ -n "$MODEL_ARMOR_PROMPT_TEMPLATE" ] || [ -n "$MODEL_ARMOR_RESPONSE_TEMPLATE" ]; then
+    _gov_roles+=("roles/modelarmor.user")
+  fi
   grant_roles_fast "$PROJECT_ID" "serviceAccount" "$COMPUTE_SA" \
     "roles/mcp.toolUser" "roles/bigquery.jobUser" "roles/bigquery.dataEditor" \
     "roles/serviceusage.serviceUsageConsumer" "roles/aiplatform.user" "roles/logging.logWriter" \
     "roles/datastore.user" "roles/storage.objectViewer" "roles/artifactregistry.admin" "roles/run.invoker" \
     "roles/pubsub.publisher" "roles/cloudscheduler.admin" "roles/dataplex.catalogViewer" \
     "roles/storage.objectAdmin" "roles/cloudtasks.enqueuer" "roles/secretmanager.secretAccessor" \
-    "roles/secretmanager.secretVersionAdder"
+    "roles/secretmanager.secretVersionAdder" "${_gov_roles[@]}"
   grant_roles_fast "$PROJECT_ID" "serviceAccount" "$SCHED_SA" "roles/pubsub.publisher"
   grant_roles_fast "$PROJECT_ID" "serviceAccount" "$DISCOVERY_ENGINE_SA" "roles/run.invoker"
   # Signed download links are minted through the IAM signBlob API rather than a
@@ -1021,6 +1059,22 @@ if [ "$ENABLE_MANAGED_AGENT" = "1" ]; then
   CR_ENV_VARS="${CR_ENV_VARS},MANAGED_AGENT_ID=${MANAGED_AGENT_ID}"
   CR_ENV_VARS="${CR_ENV_VARS},MANAGED_AGENT_SKILLS_SOURCE=${MA_SKILLS_SOURCE:-}"
 fi
+if [ "$ENABLE_CLOUD_TELEMETRY" = "1" ]; then
+  CR_ENV_VARS="${CR_ENV_VARS},ENABLE_CLOUD_TELEMETRY=1"
+  CR_ENV_VARS="${CR_ENV_VARS},OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=NO_CONTENT"
+fi
+if [ "$ENABLE_MODEL_ARMOR" = "1" ] || [ -n "$MODEL_ARMOR_TEMPLATE" ] || [ -n "$MODEL_ARMOR_PROMPT_TEMPLATE" ] || [ -n "$MODEL_ARMOR_RESPONSE_TEMPLATE" ]; then
+  CR_ENV_VARS="${CR_ENV_VARS},ENABLE_MODEL_ARMOR=1"
+  if [ -n "$MODEL_ARMOR_TEMPLATE" ]; then
+    CR_ENV_VARS="${CR_ENV_VARS},MODEL_ARMOR_TEMPLATE=${MODEL_ARMOR_TEMPLATE}"
+  fi
+  if [ -n "$MODEL_ARMOR_PROMPT_TEMPLATE" ]; then
+    CR_ENV_VARS="${CR_ENV_VARS},MODEL_ARMOR_PROMPT_TEMPLATE=${MODEL_ARMOR_PROMPT_TEMPLATE}"
+  fi
+  if [ -n "$MODEL_ARMOR_RESPONSE_TEMPLATE" ]; then
+    CR_ENV_VARS="${CR_ENV_VARS},MODEL_ARMOR_RESPONSE_TEMPLATE=${MODEL_ARMOR_RESPONSE_TEMPLATE}"
+  fi
+fi
 
 # Maps. get_maps_mcp_toolset() returns None when MAPS_API_KEY is unset, which
 # drops the geospatial tools silently - and the demo playbook mandates one
@@ -1086,7 +1140,7 @@ MIN_INSTANCES="${MIN_INSTANCES:-0}"
 # --no-allow-unauthenticated + --ingress internal is the posture the Web UI ships:
 # Gemini Enterprise reaches the service over Google-internal traffic, so nothing
 # needs to be exposed publicly.
-gcloud run deploy "$SERVICE_NAME" \
+gcloud beta run deploy "$SERVICE_NAME" \
   --source . \
   --project "$PROJECT_ID" \
   --region "$REGION" \
@@ -1101,6 +1155,8 @@ gcloud run deploy "$SERVICE_NAME" \
   --no-allow-unauthenticated \
   --ingress internal \
   --labels "created-by=adk" \
+  --functional-type=agent \
+  --identity-type=agent-identity \
   --set-env-vars="$CR_ENV_VARS" \
   --quiet \
   $SECRETS_FLAG
@@ -1872,6 +1928,19 @@ if [ ! -z "$GCS_CONSOLE_URL" ]; then
   echo "   👉 ${GCS_CONSOLE_URL}"
   echo ""
 fi
+if [ "$ENABLE_CLOUD_TELEMETRY" = "1" ]; then
+  echo "📈 Cloud Trace Explorer (Telemetry & Token Usage):"
+  echo "   👉 https://console.cloud.google.com/traces/explorer?project=${PROJECT_ID}"
+  echo ""
+fi
+if [ "$ENABLE_MODEL_ARMOR" = "1" ] || [ -n "$MODEL_ARMOR_TEMPLATE" ] || [ -n "$MODEL_ARMOR_PROMPT_TEMPLATE" ] || [ -n "$MODEL_ARMOR_RESPONSE_TEMPLATE" ]; then
+  echo "🛡️ Model Armor Guardrails Console:"
+  echo "   👉 https://console.cloud.google.com/security/model-armor?project=${PROJECT_ID}"
+  echo ""
+fi
+echo "📋 Google Cloud Agent Registry:"
+echo "   👉 https://console.cloud.google.com/agent-platform/agent-registry?project=${PROJECT_ID}"
+echo ""
 echo "================================================================================"
 echo "💡 Next Steps:"
 echo "• Open the Gemini Enterprise Chat URL above and try the 7 Demo Prompts!"

@@ -2191,6 +2191,38 @@ limitations under the License.
                   <p class="text-[10px] text-gray-500 leading-snug flex-1">Let the agent operate a real Chromium browser (<a href="https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/computer-use" target="_blank" rel="noopener" class="text-sky-400 hover:underline">Gemini 3.8 Flash Computer Use</a>) to run no-API websites. Watchable via a live-view link + in-chat screenshots.</p>
                 </div>
               </div>
+
+              <div>
+                <label class="block text-[10px] text-gray-500 mb-2 font-bold uppercase tracking-widest">AI Governance & Telemetry (Cloud Trace)</label>
+                <div class="flex items-center gap-3">
+                  <label class="flex items-center gap-2 cursor-pointer group shrink-0">
+                    <div class="relative">
+                      <input id="enableCloudTelemetry" type="checkbox" class="sr-only peer" checked>
+                      <div class="w-8 h-4 bg-gray-700 rounded-full peer peer-checked:bg-sky-500 transition-all after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:after:translate-x-4"></div>
+                    </div>
+                  </label>
+                  <p class="text-[10px] text-gray-500 leading-snug flex-1">Enables OpenTelemetry & Google Cloud Trace instrumentation. Fully tracks per-turn LLM token consumption (input/output), latency waterfall, and tool execution timing. <span class="text-emerald-400/80 font-bold">Enabled by default</span> — 0ms added latency on warm turns (async batching), PII safe via <code class="text-gray-400">NO_CONTENT</code> (zero prompt text transmitted), free under monthly Cloud Trace quota.</p>
+                </div>
+              </div>
+
+              <div>
+                <label class="block text-[10px] text-gray-500 mb-2 font-bold uppercase tracking-widest">Model Armor (Sensitive Data & Safety)</label>
+                <div class="space-y-2">
+                  <div class="flex items-center gap-3">
+                    <label class="flex items-center gap-2 cursor-pointer group shrink-0">
+                      <div class="relative">
+                        <input id="enableModelArmor" type="checkbox" class="sr-only peer" onchange="toggleModelArmorOverride()">
+                        <div class="w-8 h-4 bg-gray-700 rounded-full peer peer-checked:bg-sky-500 transition-all after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:after:translate-x-4"></div>
+                      </div>
+                    </label>
+                    <p class="text-[10px] text-gray-500 leading-snug flex-1">Enforces native Model Armor sanitization for prompt injection & jailbreak defense, automatic sensitive data protection (SDP Basic for API key / credential masking), and RAI safety filters.</p>
+                  </div>
+                  <div id="modelArmorTemplateContainer" class="hidden pl-11">
+                    <input id="modelArmorTemplate" type="text" class="w-full bg-gray-800/50 border border-gray-600 rounded-xl p-2 text-xs text-gray-200 placeholder-gray-500 focus:border-sky-500 outline-none font-mono" placeholder="Auto-provision ge-demo-default-armor (leave blank or specify template ARN)">
+                    <p class="text-[9px] text-gray-500 mt-1">Leave blank to auto-create and bind the standard generic template in <code class="text-gray-400">us-central1</code>.</p>
+                  </div>
+                </div>
+              </div>
             </div>
         </section>
 
@@ -4570,6 +4602,9 @@ limitations under the License.
         enableComputerUse: document.getElementById('enableComputerUse') ? document.getElementById('enableComputerUse').checked : false,
         enableManagedAgent: document.getElementById('enableManagedAgent') ? document.getElementById('enableManagedAgent').checked : false,
         enableWorkspaceAuth: document.getElementById('enableWorkspaceAuth') ? document.getElementById('enableWorkspaceAuth').checked : false,
+        enableCloudTelemetry: document.getElementById('enableCloudTelemetry') ? document.getElementById('enableCloudTelemetry').checked : true,
+        enableModelArmor: document.getElementById('enableModelArmor') ? document.getElementById('enableModelArmor').checked : false,
+        modelArmorTemplate: (document.getElementById('modelArmorTemplate') && document.getElementById('modelArmorTemplate').value.trim()) || null,
         targetPersona: (getSelectedPersona() || {}).label || null,
         targetPersonaDesc: (getSelectedPersona() || {}).description || null,
         // M4 (P17-lite): pass researched real-world scale facts, but only when
@@ -6203,6 +6238,19 @@ limitations under the License.
         container.classList.add('opacity-50', 'pointer-events-none');
         input.disabled = true;
         input.value = ''; // Optional: clear if disabled
+      }
+    function toggleModelArmorOverride() {
+      const isChecked = document.getElementById('enableModelArmor') && document.getElementById('enableModelArmor').checked;
+      const container = document.getElementById('modelArmorTemplateContainer');
+      const input = document.getElementById('modelArmorTemplate');
+      if (!container || !input) return;
+
+      if (isChecked) {
+        container.classList.remove('hidden');
+        input.disabled = false;
+      } else {
+        container.classList.add('hidden');
+        input.disabled = true;
       }
     }
 

@@ -1218,8 +1218,22 @@ _validated_tool_config = types.ToolConfig(
         mode=types.FunctionCallingConfigMode.VALIDATED
     )
 )
+_ma_prompt_tpl = (os.environ.get("MODEL_ARMOR_PROMPT_TEMPLATE") or os.environ.get("MODEL_ARMOR_TEMPLATE") or "").strip()
+_ma_resp_tpl = (os.environ.get("MODEL_ARMOR_RESPONSE_TEMPLATE") or os.environ.get("MODEL_ARMOR_TEMPLATE") or "").strip()
+_ma_config = None
+if _ma_prompt_tpl or _ma_resp_tpl:
+    try:
+        _ma_config = types.ModelArmorConfig(
+            prompt_template_name=_ma_prompt_tpl or None,
+            response_template_name=_ma_resp_tpl or None,
+        )
+    except Exception as _ma_err:
+        import logging as _logging
+        _logging.getLogger(__name__).warning("[model_armor] Config init failed: " + str(_ma_err))
+
 _validated_generate_config = types.GenerateContentConfig(
-    tool_config=_validated_tool_config
+    tool_config=_validated_tool_config,
+    model_armor_config=_ma_config,
 )
 
 async def inject_image_callback(callback_context: adk_callback_context.CallbackContext, llm_response: adk_llm_response.LlmResponse) -> adk_llm_response.LlmResponse | None:

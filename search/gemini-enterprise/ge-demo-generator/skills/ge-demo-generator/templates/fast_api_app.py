@@ -5448,8 +5448,36 @@ def _build_static_agent_card() -> AgentCard:
         ],
     )
 
+def _maybe_init_cloud_telemetry() -> None:
+    """Initializes OpenTelemetry Cloud Trace and Google Gen AI SDK instrumentation if enabled."""
+    if os.environ.get("ENABLE_CLOUD_TELEMETRY", "1").lower() in ("0", "false", "no", "off"):
+        return
+    try:
+        import google.auth
+        from google.adk.telemetry.google_cloud import get_gcp_exporters, get_gcp_resource
+        from google.adk.telemetry.setup import maybe_set_otel_providers
+        from opentelemetry.instrumentation.google_genai import GoogleGenAiSdkInstrumentor
+
+        credentials, project_id = google.auth.default()
+        otel_hooks = [
+            get_gcp_exporters(
+                enable_cloud_tracing=True,
+                enable_cloud_metrics=True,
+                enable_cloud_logging=True,
+                google_auth=(credentials, project_id),
+            )
+        ]
+        otel_res = get_gcp_resource(project_id)
+        maybe_set_otel_providers(otel_hooks_to_setup=otel_hooks, otel_resource=otel_res)
+
+        GoogleGenAiSdkInstrumentor().instrument()
+        logger.log_text("[telemetry] Cloud Trace & Gen AI OpenTelemetry instrumentation active")
+    except Exception as _tel_err:
+        logger.log_text("[telemetry] WARNING: Failed to initialize Cloud Telemetry (continuing): " + str(_tel_err))
+
 @asynccontextmanager
 async def lifespan(app_instance: FastAPI) -> AsyncIterator[None]:
+    _maybe_init_cloud_telemetry()
     # CRITICAL: Register A2A routes IMMEDIATELY with a static agent card.
     # Do NOT call AgentCardBuilder.build() — it connects to ALL MCP servers
     # to discover tools, which hangs on slow/broken MCP connections and
@@ -6205,6 +6233,16 @@ def collect_feedback(feedback: Feedback) -> dict[str, str]:
     logger.log_struct(feedback.model_dump(), severity="INFO")
     return {"status": "success"}
 
+
+@app.get("/.well-known/agent-card.json")
+async def get_root_agent_card():
+    card = _build_static_agent_card()
+    if hasattr(card, "model_dump"):
+        return card.model_dump(by_alias=True, exclude_none=True)
+    return card.dict(by_alias=True, exclude_none=True)
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
+

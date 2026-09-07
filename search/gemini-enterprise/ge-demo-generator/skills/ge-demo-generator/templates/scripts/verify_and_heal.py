@@ -24,8 +24,8 @@
 
 
 # =============================================================================
-# Autonomous Post-Deployment Verification & Self-Healing Engine (v2.15.0)
-# Automatically audits 8 infrastructure layers and heals discrepancies in real time:
+# Autonomous Post-Deployment Verification & Self-Healing Engine (v2.19.0)
+# Automatically audits 10 infrastructure layers and heals discrepancies in real time:
 #   1. BigQuery Dataset & Tables (Row counts, _id column for DataStores, schema metadata)
 #   2. Firestore Collection & Seeding (Task queue documents >= 3)
 #   3. Data Viewer Dashboard & IAP Security (Status 200, IAP policy bindings)
@@ -36,6 +36,8 @@
 #      and - when the agent is missing or unauthorized - provisioning the Workspace
 #      authorization resource, re-running register_agent.py and re-deriving the chat link)
 #   8. External Files & Google Drive (PDF, Excel, Images generation and upload)
+#   9. AI Governance & Telemetry (Cloud Trace & Model Armor IAM when opted in)
+#  10. Google Cloud Agent Registry (Fleet inventory verification via gcloud agent-registry)
 # =============================================================================
 
 import os
@@ -660,6 +662,76 @@ if GCS_BUCKET_NAME:
     elif _envs is not None:
         record_check("External Files", "Bucket Name Wiring", "PASS", "None",
                      "Cloud Run carries GCS_BUCKET_NAME")
+
+# -----------------------------------------------------------------------------
+# Layer 9: AI Governance & Telemetry Verification & Self-Healing
+# -----------------------------------------------------------------------------
+ENABLE_CLOUD_TELEMETRY = os.environ.get("ENABLE_CLOUD_TELEMETRY", "true").lower() in ("true", "1", "yes")
+ENABLE_MODEL_ARMOR = os.environ.get("ENABLE_MODEL_ARMOR", "false").lower() in ("true", "1", "yes")
+MODEL_ARMOR_TPL = (os.environ.get("MODEL_ARMOR_TEMPLATE", "") or
+                   os.environ.get("MODEL_ARMOR_PROMPT_TEMPLATE", "") or
+                   os.environ.get("MODEL_ARMOR_RESPONSE_TEMPLATE", "")).strip()
+if ENABLE_MODEL_ARMOR and not MODEL_ARMOR_TPL:
+    MODEL_ARMOR_TPL = f"projects/{PROJECT_ID}/locations/us-central1/templates/ge-demo-default-armor"
+
+if ENABLE_CLOUD_TELEMETRY or ENABLE_MODEL_ARMOR or MODEL_ARMOR_TPL:
+    print("\n🔍 Layer 9: Verifying AI Governance & Telemetry...")
+    compute_sa = f"{PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
+
+    if ENABLE_CLOUD_TELEMETRY:
+        res = subprocess.run(["gcloud", "projects", "get-iam-policy", PROJECT_ID,
+                              f"--filter=bindings.members:serviceAccount:{compute_sa}",
+                              "--flatten=bindings[].members",
+                              "--format=value(bindings.role)"], capture_output=True, text=True)
+        roles = res.stdout.split() if res.returncode == 0 else []
+        if "roles/cloudtrace.agent" in roles:
+            record_check("AI Governance", "Cloud Trace IAM", "PASS", "None", f"{compute_sa} has roles/cloudtrace.agent")
+        else:
+            heal_res = subprocess.run(["gcloud", "projects", "add-iam-policy-binding", PROJECT_ID,
+                                       f"--member=serviceAccount:{compute_sa}",
+                                       "--role=roles/cloudtrace.agent", "--condition=None"], capture_output=True, text=True)
+            if heal_res.returncode == 0:
+                record_check("AI Governance", "Cloud Trace IAM", "HEALED", "Granted roles/cloudtrace.agent", f"Granted to {compute_sa}")
+            else:
+                record_check("AI Governance", "Cloud Trace IAM", "WARN", "Could not grant roles/cloudtrace.agent", heal_res.stderr.strip()[:100])
+
+    if ENABLE_MODEL_ARMOR or MODEL_ARMOR_TPL:
+        res = subprocess.run(["gcloud", "projects", "get-iam-policy", PROJECT_ID,
+                              f"--filter=bindings.members:serviceAccount:{compute_sa}",
+                              "--flatten=bindings[].members",
+                              "--format=value(bindings.role)"], capture_output=True, text=True)
+        roles = res.stdout.split() if res.returncode == 0 else []
+        if "roles/modelarmor.user" in roles:
+            record_check("AI Governance", "Model Armor IAM", "PASS", "None", f"{compute_sa} has roles/modelarmor.user")
+        else:
+            heal_res = subprocess.run(["gcloud", "projects", "add-iam-policy-binding", PROJECT_ID,
+                                       f"--member=serviceAccount:{compute_sa}",
+                                       "--role=roles/modelarmor.user", "--condition=None"], capture_output=True, text=True)
+            if heal_res.returncode == 0:
+                record_check("AI Governance", "Model Armor IAM", "HEALED", "Granted roles/modelarmor.user", f"Granted to {compute_sa}")
+            else:
+                record_check("AI Governance", "Model Armor IAM", "WARN", "Could not grant roles/modelarmor.user", heal_res.stderr.strip()[:100])
+
+# -----------------------------------------------------------------------------
+# Layer 10: Google Cloud Agent Registry Fleet Inventory Verification
+# -----------------------------------------------------------------------------
+print("\n🔍 Layer 10: Verifying Google Cloud Agent Registry Registration...")
+try:
+    reg_check = subprocess.run(
+        ["gcloud", "agent-registry", "agents", "list", f"--project={PROJECT_ID}", f"--location={REGION}", f"--filter=displayName={SERVICE_NAME}", "--format=json"],
+        capture_output=True, text=True
+    )
+    if reg_check.returncode == 0:
+        reg_items = json.loads(reg_check.stdout or "[]")
+        if reg_items:
+            reg_agent_id = reg_items[0].get("agentId") or reg_items[0].get("name")
+            record_check("Agent Registry", "Fleet Inventory", "PASS", "None", f"Agent registered: {reg_agent_id}")
+        else:
+            record_check("Agent Registry", "Fleet Inventory", "WARN", "Not yet indexed", "Cloud Run agent registration may take 1-2 minutes to index")
+    else:
+        record_check("Agent Registry", "Fleet Inventory", "WARN", "API Query Failed", reg_check.stderr.strip()[:80])
+except Exception as _reg_e:
+    record_check("Agent Registry", "Fleet Inventory", "WARN", "Check Error", str(_reg_e)[:80])
 
 # -----------------------------------------------------------------------------
 # Final Health Summary & Decision Gate

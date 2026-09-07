@@ -101,7 +101,7 @@ const CONFIG = {
   GITHUB_TOKEN: SCRIPT_PROPS.getProperty('GITHUB_TOKEN'),
   MAX_RETRIES: 3,
   RETRY_DELAY_MS: 1000,
-  APP_VERSION: 'v12.10-public',
+  APP_VERSION: 'v12.13-public',
   // Agent-template source: the generated setup script fetches the static
   // Python/JSON template files (agent_template/ in the repo) at run time.
   // TEMPLATE_REF may be a branch name (default 'main'): it is resolved to a
@@ -548,7 +548,17 @@ function generateDemo(userGoal, options = {}) {
     // toggle exists because the trade-off lands on exactly one message - the
     // first one after an idle gap - and that is often the one an audience
     // watches. MIN_INSTANCES in the environment still overrides either way.
-    keepWarm: false
+    keepWarm: false,
+    enableCloudTelemetry: true,
+    enableModelArmor: false,
+    modelArmorTemplate: '',
+    // Data exploration. 'mcp' is the default: the data-asset catalog is already
+    // in the system instruction, so a figure question is ONE execute_sql call
+    // with no metadata expedition first, and no index has to be built, imported
+    // or scoped for the demo to work. 'rag' adds the Discovery Engine index and
+    // makes it the read path - worth it when the demo turns on documents rather
+    // than figures. v11.65-v11.72 defaulted to the hybrid variant of 'rag'.
+    dataExplorationMode: 'mcp'
   };
   options = { ...defaultOptions, ...options };
   
@@ -639,6 +649,10 @@ function generateDemo(userGoal, options = {}) {
     result.enableManagedAgent = options.enableManagedAgent || false;
     result.enableWorkspaceAuth = options.enableWorkspaceAuth || false;
     result.keepWarm = options.keepWarm || false;
+    result.enableCloudTelemetry = options.enableCloudTelemetry !== false;
+    result.enableModelArmor = options.enableModelArmor || false;
+    result.modelArmorTemplate = options.modelArmorTemplate || '';
+    result.dataExplorationMode = (options.dataExplorationMode === 'rag') ? 'rag' : 'mcp';
 
     result.setupScript = generateSetupScript({
       datasetId: datasetId,
@@ -660,6 +674,10 @@ function generateDemo(userGoal, options = {}) {
       enableManagedAgent: options.enableManagedAgent,
       enableWorkspaceAuth: options.enableWorkspaceAuth,
       keepWarm: options.keepWarm,
+      enableCloudTelemetry: result.enableCloudTelemetry,
+      enableModelArmor: result.enableModelArmor,
+      modelArmorTemplate: result.modelArmorTemplate,
+      dataExplorationMode: result.dataExplorationMode,
       metadata: planResult.metadata
     });
     result.steps.push({ step: 4, status: 'completed', message: 'Generation complete' });
@@ -2450,7 +2468,7 @@ function buildDataAssetCatalog_(tables) {
 }
 
 function generateSetupScript(params) {
-  const { datasetId, systemInstruction, businessInstruction, referenceDate, publicDatasetId, suffix, tables, firestore, userGoal, dirName, agentShortName, oneSentenceSummary, operatingModel, enableWorkspaceMcp, enableComputerUse, enableManagedAgent, enableWorkspaceAuth, keepWarm, metadata } = params;
+  const { datasetId, systemInstruction, businessInstruction, referenceDate, publicDatasetId, suffix, tables, firestore, userGoal, dirName, agentShortName, oneSentenceSummary, operatingModel, enableWorkspaceMcp, enableComputerUse, enableManagedAgent, enableWorkspaceAuth, keepWarm, enableCloudTelemetry, enableModelArmor, modelArmorTemplate, metadata } = params;
 
   // Derived feature gates (see AGENTS.md section 14):
   // - workspaceAuthEnabled: the GE OAuth authorization (user token) exists.
@@ -3441,7 +3459,8 @@ echo ""
     "telemetry.googleapis.com",
     "firestore.googleapis.com",
     "cloudfunctions.googleapis.com",
-    "dataplex.googleapis.com"
+    "dataplex.googleapis.com",
+    "agentregistry.googleapis.com"
   ];
   if (workspaceAuthEnabled) {
     // Needed for full Workspace MCP AND for the auth-only mode: the gws CLI /
@@ -4236,7 +4255,7 @@ while true; do
   echo "📂 Demo Asset Directory: ~/${dirName}"
   echo "🧠 Agent Models:   root_agent: \$AGENT_MODEL_LITE / deep_analysis_agent: \$AGENT_MODEL"
   echo "🧪 Code Sandbox:   ✅ Enabled (Agent Runtime)"
-  ${ enableComputerUse ? `echo "🖥️ Computer Use:   ✅ Enabled (Browser Agent)"\n` : ''}${ enableManagedAgent ? `echo "🤖 Managed Agent:  ✅ Enabled (Antigravity autonomous sandbox - provisioned in parallel with setup)"\n` : ''}${ enableWorkspaceMcp ? `echo "🔌 Google Workspace MCP: Enabled"\n` : ''}${ (enableWorkspaceAuth && !enableWorkspaceMcp) ? `echo "🔐 Workspace Auth: ✅ Enabled (user OAuth, no MCP servers)"\n` : ''}${ keepWarm ? 'echo "🔥 Warm Instance:  ✅ Enabled (min-instances 1 - no cold start, billed while idle)"\n' : ''}${mcpBanner}echo "========================================================="
+  ${ enableComputerUse ? `echo "🖥️ Computer Use:   ✅ Enabled (Browser Agent)"\n` : ''}${ enableManagedAgent ? `echo "🤖 Managed Agent:  ✅ Enabled (Antigravity autonomous sandbox - provisioned in parallel with setup)"\n` : ''}${ enableWorkspaceMcp ? `echo "🔌 Google Workspace MCP: Enabled"\n` : ''}${ (enableWorkspaceAuth && !enableWorkspaceMcp) ? `echo "🔐 Workspace Auth: ✅ Enabled (user OAuth, no MCP servers)"\n` : ''}${ keepWarm ? 'echo "🔥 Warm Instance:  ✅ Enabled (min-instances 1 - no cold start, billed while idle)"\n' : ''}${ enableCloudTelemetry !== false ? 'echo "📡 Telemetry (Trace): ✅ Enabled (Cloud Trace token tracking & latency waterfall)"\n' : 'echo "📡 Telemetry (Trace): ❌ Disabled"\n' }${ enableModelArmor ? 'echo "🛡️ Model Armor:     ✅ Enabled (Prompt injection & sensitive data protection)"\n' : ''}${mcpBanner}echo "========================================================="
   
   # --yes is advertised as "skip confirmation prompts (non-interactive use)", so
   # it has to skip this one too. Without the break, "read" gets EOF, returns
@@ -4619,6 +4638,19 @@ gcloud services enable \
   cloudbuild.googleapis.com \
   artifactregistry.googleapis.com \
   --project="$PROJECT_ID"
+${ enableCloudTelemetry !== false ? 'gcloud services enable cloudtrace.googleapis.com --project="$PROJECT_ID" 2>/dev/null || true\n' : ''}${ enableModelArmor ? `gcloud services enable modelarmor.googleapis.com --project="$PROJECT_ID" 2>/dev/null || true
+if ! gcloud model-armor templates describe "${modelArmorTemplate ? modelArmorTemplate.split('/').pop() : 'ge-demo-default-armor'}" --location="us-central1" --project="$PROJECT_ID" >/dev/null 2>&1; then
+  echo "🛡️ Provisioning standard generic Model Armor template (${modelArmorTemplate ? modelArmorTemplate.split('/').pop() : 'ge-demo-default-armor'})..."
+  gcloud model-armor templates create "${modelArmorTemplate ? modelArmorTemplate.split('/').pop() : 'ge-demo-default-armor'}" \\
+    --location="us-central1" \\
+    --project="$PROJECT_ID" \\
+    --pi-and-jailbreak-filter-settings-enforcement=enabled \\
+    --pi-and-jailbreak-filter-settings-confidence-level=medium-and-above \\
+    --malicious-uri-filter-settings-enforcement=enabled \\
+    --rai-settings-filters=hate-speech,harassment,sexually-explicit,dangerous \\
+    --rai-settings-confidence-level=medium-and-above \\
+    --basic-config-filter-enforcement=enabled 2>/dev/null || true
+fi\n` : ''}
 
 # Fast IAM role granting: pre-checks existing roles, skips already-granted, no verification delay
 grant_roles_fast() {
@@ -4666,7 +4698,7 @@ grant_roles_fast "$PROJECT_ID" "serviceAccount" "\$COMPUTE_SA" \
   "roles/mcp.toolUser" "roles/bigquery.jobUser" "roles/bigquery.dataEditor" \
   "roles/serviceusage.serviceUsageConsumer" "roles/aiplatform.user" "roles/logging.logWriter" \
   "roles/datastore.user" "roles/storage.objectViewer" "roles/storage.objectAdmin" "roles/artifactregistry.admin" "roles/run.invoker" \
-  "roles/pubsub.publisher" "roles/cloudscheduler.admin" "roles/cloudtasks.enqueuer" "roles/dataplex.catalogViewer"
+  "roles/pubsub.publisher" "roles/cloudscheduler.admin" "roles/cloudtasks.enqueuer" "roles/dataplex.catalogViewer"${ enableCloudTelemetry !== false ? ' "roles/cloudtrace.agent"' : '' }${ enableModelArmor ? ' "roles/modelarmor.user"' : '' }
 
 # Background task infra: Cloud Scheduler SA needs pubsub.publisher
 echo "🔐 Configuring IAM for Cloud Scheduler Service Agent..."
@@ -5513,6 +5545,10 @@ ENABLE_WORKSPACE_MCP=${enableWorkspaceMcp ? '1' : '0'}
 ENABLE_COMPUTER_USE=${enableComputerUse ? '1' : '0'}
 ENABLE_MANAGED_AGENT=${enableManagedAgent ? '1' : '0'}
 ENABLE_WORKSPACE_AUTH=${enableWorkspaceAuth ? '1' : '0'}
+ENABLE_CLOUD_TELEMETRY=${enableCloudTelemetry !== false ? '1' : '0'}
+ENABLE_MODEL_ARMOR=${enableModelArmor ? '1' : '0'}
+MODEL_ARMOR_TEMPLATE="${modelArmorTemplate || (enableModelArmor ? 'projects/' + '$PROJECT_ID' + '/locations/us-central1/templates/ge-demo-default-armor' : '')}"
+OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT="NO_CONTENT"
 MAPS_API_KEY="$API_KEY"
 PYTHONUNBUFFERED=1
 GRPC_ENABLE_FORK_SUPPORT=1
@@ -5782,6 +5818,10 @@ ${ (params.importedMcpList || []).some(m => m.type === 'remote' && (m.auth_type 
       `ENABLE_WORKSPACE_AUTH=${enableWorkspaceAuth ? '1' : '0'}`,
       "DASHBOARDS_BUCKET=\$DASH_BUCKET",
       "RUNTIME_SA_EMAIL=\$COMPUTE_SA",
+      `ENABLE_CLOUD_TELEMETRY=${enableCloudTelemetry !== false ? '1' : '0'}`,
+      `ENABLE_MODEL_ARMOR=${enableModelArmor ? '1' : '0'}`,
+      `MODEL_ARMOR_TEMPLATE=${modelArmorTemplate || (enableModelArmor ? 'projects/' + '\$PROJECT_ID' + '/locations/us-central1/templates/ge-demo-default-armor' : '')}`,
+      "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=NO_CONTENT",
       // Background worker dispatch. Unset (or a queue that cannot be reached)
       // makes the runtime fall back to the in-container localhost self-call.
       "WORKER_QUEUE=\$WORKER_QUEUE",
@@ -5918,7 +5958,7 @@ ${ (params.importedMcpList || []).some(m => m.type === 'remote' && (m.auth_type 
       }
       deployCmd += `\nSECRETS_FLAG=""\nif [ -n "\$ALL_SECRETS" ]; then\n  SECRETS_FLAG="--update-secrets=\$ALL_SECRETS"\nfi\n`;
       deployCmd += `\nCR_ENV_VARS="${envVars.join(",")}"\nif [ "\$VIEWER_DEPLOYED" = "true" ]; then\n  CR_ENV_VARS="\$CR_ENV_VARS,DATA_VIEWER_URL=\$VIEWER_URL"\nfi\nCR_ENV_VARS="\$CR_ENV_VARS,SANDBOX_RESOURCE_NAME=\$SANDBOX_RESOURCE_NAME"\n${enableManagedAgent ? `CR_ENV_VARS="\$CR_ENV_VARS,MANAGED_AGENT_ID=\$MANAGED_AGENT_ID,MANAGED_AGENT_SKILLS_SOURCE=\$MA_SKILLS_SOURCE"\n` : ''}`;
-      deployCmd += `\ngcloud run deploy "\$SERVICE_NAME" \
+      deployCmd += `\ngcloud beta run deploy "\$SERVICE_NAME" \
     --source .. \
     --memory "8Gi" \
     --cpu 2 \
@@ -5930,12 +5970,14 @@ ${ (params.importedMcpList || []).some(m => m.type === 'remote' && (m.auth_type 
     --no-allow-unauthenticated \
     --ingress internal \
     --labels "created-by=adk" \
+    --functional-type=agent \
+    --identity-type=agent-identity \
     --set-env-vars="\$CR_ENV_VARS" \
     \$SECRETS_FLAG \
     --region us-central1 \
     --quiet > "\$DEPLOY_LOG" 2>&1 &`;
     } else {
-      deployCmd += `CR_ENV_VARS="${envVars.join(",")}"\nif [ "\$VIEWER_DEPLOYED" = "true" ]; then\n  CR_ENV_VARS="\$CR_ENV_VARS,DATA_VIEWER_URL=\$VIEWER_URL"\nfi\nCR_ENV_VARS="\$CR_ENV_VARS,SANDBOX_RESOURCE_NAME=\$SANDBOX_RESOURCE_NAME"\n${enableManagedAgent ? `CR_ENV_VARS="\$CR_ENV_VARS,MANAGED_AGENT_ID=\$MANAGED_AGENT_ID,MANAGED_AGENT_SKILLS_SOURCE=\$MA_SKILLS_SOURCE"\n` : ''}gcloud run deploy "\$SERVICE_NAME" \
+      deployCmd += `CR_ENV_VARS="${envVars.join(",")}"\nif [ "\$VIEWER_DEPLOYED" = "true" ]; then\n  CR_ENV_VARS="\$CR_ENV_VARS,DATA_VIEWER_URL=\$VIEWER_URL"\nfi\nCR_ENV_VARS="\$CR_ENV_VARS,SANDBOX_RESOURCE_NAME=\$SANDBOX_RESOURCE_NAME"\n${enableManagedAgent ? `CR_ENV_VARS="\$CR_ENV_VARS,MANAGED_AGENT_ID=\$MANAGED_AGENT_ID,MANAGED_AGENT_SKILLS_SOURCE=\$MA_SKILLS_SOURCE"\n` : ''}gcloud beta run deploy "\$SERVICE_NAME" \
     --source .. \
     --memory "8Gi" \
     --cpu 2 \
@@ -5947,6 +5989,8 @@ ${ (params.importedMcpList || []).some(m => m.type === 'remote' && (m.auth_type 
     --no-allow-unauthenticated \
     --ingress internal \
     --labels "created-by=adk" \
+    --functional-type=agent \
+    --identity-type=agent-identity \
     --set-env-vars="\$CR_ENV_VARS"`;
       if (secrets.length > 0) {
         deployCmd += ` \\\n    --update-secrets="${secrets.join(",")}"`;
@@ -6388,6 +6432,9 @@ ${params.importedMcpList.map((mcp, idx) => {
 
   echo "🔎 BigQuery Console:"
   echo "   👉 https://console.cloud.google.com/bigquery?referrer=search&project=\$PROJECT_ID&ws=!1m4!1m3!3m2!1s\$PROJECT_ID!2s${datasetId}"
+  echo ""
+  echo "📋 Google Cloud Agent Registry:"
+  echo "   👉 https://console.cloud.google.com/agent-platform/agent-registry?project=\$PROJECT_ID"
   echo ""
   echo "========================================================="
   echo ""
