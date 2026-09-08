@@ -2378,3 +2378,8 @@ Zvrm
 ZWSP
 cloudtrace
 fontconfig
+gui
+MSYS
+otf
+wsl
+WSL
