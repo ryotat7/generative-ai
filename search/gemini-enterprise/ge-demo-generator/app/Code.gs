@@ -101,7 +101,7 @@ const CONFIG = {
   GITHUB_TOKEN: SCRIPT_PROPS.getProperty('GITHUB_TOKEN'),
   MAX_RETRIES: 3,
   RETRY_DELAY_MS: 1000,
-  APP_VERSION: 'v12.15-public',
+  APP_VERSION: 'v12.16-public',
   // Agent-template source: the generated setup script fetches the static
   // Python/JSON template files (agent_template/ in the repo) at run time.
   // TEMPLATE_REF may be a branch name (default 'main'): it is resolved to a
@@ -3469,8 +3469,7 @@ echo ""
     "telemetry.googleapis.com",
     "firestore.googleapis.com",
     "cloudfunctions.googleapis.com",
-    "dataplex.googleapis.com",
-    "agentregistry.googleapis.com"
+    "dataplex.googleapis.com"
   ];
   if (workspaceAuthEnabled) {
     // Needed for full Workspace MCP AND for the auth-only mode: the gws CLI /
@@ -6440,9 +6439,6 @@ ${params.importedMcpList.map((mcp, idx) => {
 
   echo "🔎 BigQuery Console:"
   echo "   👉 https://console.cloud.google.com/bigquery?referrer=search&project=\$PROJECT_ID&ws=!1m4!1m3!3m2!1s\$PROJECT_ID!2s${datasetId}"
-  echo ""
-  echo "📋 Google Cloud Agent Registry:"
-  echo "   👉 https://console.cloud.google.com/agent-platform/agent-registry?project=\$PROJECT_ID"
   echo ""
   echo "========================================================="
   echo ""
