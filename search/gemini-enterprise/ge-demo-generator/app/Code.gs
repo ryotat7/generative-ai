@@ -101,7 +101,7 @@ const CONFIG = {
   GITHUB_TOKEN: SCRIPT_PROPS.getProperty('GITHUB_TOKEN'),
   MAX_RETRIES: 3,
   RETRY_DELAY_MS: 1000,
-  APP_VERSION: 'v12.14-public',
+  APP_VERSION: 'v12.15-public',
   // Agent-template source: the generated setup script fetches the static
   // Python/JSON template files (agent_template/ in the repo) at run time.
   // TEMPLATE_REF may be a branch name (default 'main'): it is resolved to a
@@ -5954,8 +5954,6 @@ ${ (params.importedMcpList || []).some(m => m.type === 'remote' && (m.auth_type 
     deployCmd += keepWarm ? '\n# Advanced Settings asked for a warm instance: no cold start on the first\n# message, at the price of one always-on 8Gi/2vCPU instance for as long as the\n# demo exists. Export MIN_INSTANCES=0 to put this demo back on scale-to-zero.\nif [ -z "$MIN_INSTANCES" ]; then\n  MIN_INSTANCES=1\nfi\n' : '';
     deployCmd += `\n# Scale-to-zero unless the operator asked for a warm instance\nMIN_INSTANCES="\${MIN_INSTANCES:-0}"\n`;
 
-    deployCmd += `\n# Check gcloud release track support for Agent Registry flags\nDEPLOY_TRACK="beta"\nENABLE_AGENT_REGISTRY_FLAGS=true\nif ! gcloud beta run deploy --help 2>/dev/null | head -n 40 | grep -q -- '--functional-type'; then\n  if gcloud alpha run deploy --help 2>/dev/null | head -n 40 | grep -q -- '--functional-type'; then\n    DEPLOY_TRACK="alpha"\n  else\n    DEPLOY_TRACK=""\n    ENABLE_AGENT_REGISTRY_FLAGS=false\n    echo "  ⚠️ Note: Current gcloud does not support --functional-type (requires Google Cloud SDK >= 583.0.0 or alpha component). Deploying without Agent Registry flags."\n  fi\nfi\n`;
-
     if (optionalSecrets.length > 0) {
       deployCmd += `\n# Discover provisioned optional secrets\nOPTIONAL_SECRETS=""\n`;
       optionalSecrets.forEach(os => {
@@ -5975,26 +5973,7 @@ ${ (params.importedMcpList || []).some(m => m.type === 'remote' && (m.auth_type 
       }
       deployCmd += `\nSECRETS_FLAG=""\nif [ -n "\$ALL_SECRETS" ]; then\n  SECRETS_FLAG="--update-secrets=\$ALL_SECRETS"\nfi\n`;
       deployCmd += `\nCR_ENV_VARS="${envVars.join(",")}"\nif [ "\$VIEWER_DEPLOYED" = "true" ]; then\n  CR_ENV_VARS="\$CR_ENV_VARS,DATA_VIEWER_URL=\$VIEWER_URL"\nfi\nCR_ENV_VARS="\$CR_ENV_VARS,SANDBOX_RESOURCE_NAME=\$SANDBOX_RESOURCE_NAME"\n${enableManagedAgent ? `CR_ENV_VARS="\$CR_ENV_VARS,MANAGED_AGENT_ID=\$MANAGED_AGENT_ID,MANAGED_AGENT_SKILLS_SOURCE=\$MA_SKILLS_SOURCE"\n` : ''}`;
-      deployCmd += `\nif [ "\$ENABLE_AGENT_REGISTRY_FLAGS" = "true" ]; then\n  gcloud \$DEPLOY_TRACK run deploy "\$SERVICE_NAME" \
-    --source .. \
-    --memory "8Gi" \
-    --cpu 2 \
-    --no-cpu-throttling \
-    --cpu-boost \
-    --min-instances "\$MIN_INSTANCES" \
-    --max-instances 1 \
-    --timeout 1800 \
-    --no-allow-unauthenticated \
-    --ingress internal \
-    --labels "created-by=adk" \
-    --functional-type=agent \
-    --identity-type=agent-identity \
-    --set-env-vars="\$CR_ENV_VARS" \
-    \$SECRETS_FLAG \
-    --region us-central1 \
-    --quiet > "\$DEPLOY_LOG" 2>&1 &
-else
-  gcloud run deploy "\$SERVICE_NAME" \
+      deployCmd += `\ngcloud run deploy "\$SERVICE_NAME" \
     --source .. \
     --memory "8Gi" \
     --cpu 2 \
@@ -6009,12 +5988,10 @@ else
     --set-env-vars="\$CR_ENV_VARS" \
     \$SECRETS_FLAG \
     --region us-central1 \
-    --quiet > "\$DEPLOY_LOG" 2>&1 &
-fi`;
+    --quiet > "\$DEPLOY_LOG" 2>&1 &`;
     } else {
       const secUpdate = secrets.length > 0 ? ` \\\n    --update-secrets="${secrets.join(",")}"` : '';
-      deployCmd += `CR_ENV_VARS="${envVars.join(",")}"\nif [ "\$VIEWER_DEPLOYED" = "true" ]; then\n  CR_ENV_VARS="\$CR_ENV_VARS,DATA_VIEWER_URL=\$VIEWER_URL"\nfi\nCR_ENV_VARS="\$CR_ENV_VARS,SANDBOX_RESOURCE_NAME=\$SANDBOX_RESOURCE_NAME"\n${enableManagedAgent ? `CR_ENV_VARS="\$CR_ENV_VARS,MANAGED_AGENT_ID=\$MANAGED_AGENT_ID,MANAGED_AGENT_SKILLS_SOURCE=\$MA_SKILLS_SOURCE"\n` : ''}`;
-      deployCmd += `\nif [ "\$ENABLE_AGENT_REGISTRY_FLAGS" = "true" ]; then\n  gcloud \$DEPLOY_TRACK run deploy "\$SERVICE_NAME" \
+      deployCmd += `CR_ENV_VARS="${envVars.join(",")}"\nif [ "\$VIEWER_DEPLOYED" = "true" ]; then\n  CR_ENV_VARS="\$CR_ENV_VARS,DATA_VIEWER_URL=\$VIEWER_URL"\nfi\nCR_ENV_VARS="\$CR_ENV_VARS,SANDBOX_RESOURCE_NAME=\$SANDBOX_RESOURCE_NAME"\n${enableManagedAgent ? `CR_ENV_VARS="\$CR_ENV_VARS,MANAGED_AGENT_ID=\$MANAGED_AGENT_ID,MANAGED_AGENT_SKILLS_SOURCE=\$MA_SKILLS_SOURCE"\n` : ''}gcloud run deploy "\$SERVICE_NAME" \
     --source .. \
     --memory "8Gi" \
     --cpu 2 \
@@ -6026,24 +6003,7 @@ fi`;
     --no-allow-unauthenticated \
     --ingress internal \
     --labels "created-by=adk" \
-    --functional-type=agent \
-    --identity-type=agent-identity \
-    --set-env-vars="\$CR_ENV_VARS"${secUpdate} \\\n    --region us-central1 \\\n    --quiet > "\$DEPLOY_LOG" 2>&1 &
-else
-  gcloud run deploy "\$SERVICE_NAME" \
-    --source .. \
-    --memory "8Gi" \
-    --cpu 2 \
-    --no-cpu-throttling \
-    --cpu-boost \
-    --min-instances "\$MIN_INSTANCES" \
-    --max-instances 1 \
-    --timeout 1800 \
-    --no-allow-unauthenticated \
-    --ingress internal \
-    --labels "created-by=adk" \
-    --set-env-vars="\$CR_ENV_VARS"${secUpdate} \\\n    --region us-central1 \\\n    --quiet > "\$DEPLOY_LOG" 2>&1 &
-fi`;
+    --set-env-vars="\$CR_ENV_VARS"${secUpdate} \\\n    --region us-central1 \\\n    --quiet > "\$DEPLOY_LOG" 2>&1 &`;
     }
 
     return deployCmd;
