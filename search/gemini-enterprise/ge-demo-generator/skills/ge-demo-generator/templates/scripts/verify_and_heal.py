@@ -24,7 +24,7 @@
 
 
 # =============================================================================
-# Autonomous Post-Deployment Verification & Self-Healing Engine (v2.19.3)
+# Autonomous Post-Deployment Verification & Self-Healing Engine (v2.20.0)
 # Automatically audits 8 infrastructure layers and heals discrepancies in real time:
 #   1. BigQuery Dataset & Tables (Row counts, _id column for DataStores, schema metadata)
 #   2. Firestore Collection & Seeding (Task queue documents >= 3)
@@ -97,14 +97,106 @@ print("=" * 80)
 # Resolve Project Number and Auth Token
 def get_auth_token():
     res = subprocess.run(["gcloud", "auth", "print-access-token"], capture_output=True, text=True)
-    return res.stdout.strip()
+    tok = res.stdout.strip()
+    if tok and "error" not in tok.lower() and "problem refreshing" not in tok.lower():
+        return tok
+    res_adc = subprocess.run(["gcloud", "auth", "application-default", "print-access-token"], capture_output=True, text=True)
+    tok_adc = res_adc.stdout.strip()
+    if tok_adc and "error" not in tok_adc.lower() and "problem refreshing" not in tok_adc.lower():
+        return tok_adc
+    return ""
 
 def get_project_number():
     res = subprocess.run(["gcloud", "projects", "describe", PROJECT_ID, "--format=value(projectNumber)"], capture_output=True, text=True)
     return res.stdout.strip()
 
+def detect_host_os():
+    import platform
+    sys_name = platform.system().lower()
+    if sys_name == "darwin":
+        return "macos"
+    if sys_name == "linux":
+        try:
+            with open("/proc/version", "r") as f:
+                v = f.read().lower()
+                if "microsoft" in v or "wsl" in v:
+                    return "windows_wsl"
+        except Exception:
+            pass
+        if not os.environ.get("DISPLAY") or os.environ.get("SSH_CLIENT") or os.environ.get("SSH_TTY") or os.environ.get("CLOUD_SHELL"):
+            return "linux_headless"
+        return "linux_gui"
+    if "win" in sys_name:
+        return "windows"
+    return "linux_headless"
+
+def print_auth_guidance(proj_id):
+    detected = detect_host_os()
+    print("\n" + "=" * 80)
+    print("💡 ACTION REQUIRED: Google Cloud Authentication & Setup Guide")
+    print("=" * 80)
+    cmds = {
+        "linux_headless": (
+            "Linux / Remote VM / SSH (Headless - No Local Browser):",
+            [
+                f"gcloud auth login --enable-gdrive-access --no-launch-browser",
+                f"gcloud auth application-default login --no-launch-browser",
+                f"gcloud auth application-default set-quota-project {proj_id}",
+                f"gcloud config set project {proj_id}",
+            ],
+            "Note: Open the verification URL in any local browser, sign in, and paste the authorization code back."
+        ),
+        "macos": (
+            "macOS (Local Terminal / iTerm):",
+            [
+                f"gcloud auth login --enable-gdrive-access",
+                f"gcloud auth application-default login",
+                f"gcloud auth application-default set-quota-project {proj_id}",
+                f"gcloud config set project {proj_id}",
+            ],
+            "Note: A browser window will open automatically for authentication."
+        ),
+        "windows_wsl": (
+            "Windows (WSL / WSL2 / PowerShell):",
+            [
+                f"gcloud auth login --enable-gdrive-access",
+                f"gcloud auth application-default login",
+                f"gcloud auth application-default set-quota-project {proj_id}",
+                f"gcloud config set project {proj_id}",
+            ],
+            "Note: If running in WSL without browser interop, add '--no-launch-browser' and copy the URL to Windows browser."
+        ),
+        "linux_gui": (
+            "Linux Desktop (with GUI Display):",
+            [
+                f"gcloud auth login --enable-gdrive-access",
+                f"gcloud auth application-default login",
+                f"gcloud auth application-default set-quota-project {proj_id}",
+                f"gcloud config set project {proj_id}",
+            ],
+            "Note: A browser window will open automatically."
+        ),
+    }
+    primary_key = detected if detected in cmds else "linux_headless"
+    title, cmd_list, note = cmds[primary_key]
+    print(f"👉 [DETECTED HOST ENVIRONMENT: {title}]")
+    print("   Run the following commands to authenticate your environment:")
+    for c in cmd_list:
+        print(f"     $ {c}")
+    if note:
+        print(f"   {note}")
+    print("\n📋 [Other Environments Reference]:")
+    for k, (alt_title, alt_cmds, _) in cmds.items():
+        if k != primary_key:
+            print(f"   • {alt_title} -> {alt_cmds[0]} && {alt_cmds[1]}")
+    print("-" * 80)
+    print("🔄 Once authenticated, resume registration and healing with a single command:")
+    print("     $ python3 scripts/verify_and_heal.py")
+    print("=" * 80 + "\n")
+
 PROJECT_NUMBER = get_project_number()
 TOKEN = get_auth_token()
+
 
 REPORT = []
 
@@ -122,6 +214,8 @@ def record_check(layer, item, status, action_taken="None", details="OK"):
 
 def api_call(method, url, payload=None, extra_headers=None, timeout=30):
     global TOKEN
+    if not TOKEN:
+        TOKEN = get_auth_token()
     headers = {
         "Authorization": f"Bearer {TOKEN}",
         "Content-Type": "application/json",
@@ -136,6 +230,20 @@ def api_call(method, url, payload=None, extra_headers=None, timeout=30):
             data = resp.read().decode("utf-8")
             return resp.getcode(), json.loads(data) if data else {}
     except urllib.error.HTTPError as e:
+        if e.code == 401:
+            fresh = get_auth_token()
+            if fresh and fresh != TOKEN:
+                TOKEN = fresh
+                headers["Authorization"] = f"Bearer {TOKEN}"
+                retry_req = urllib.request.Request(url, data=body, headers=headers, method=method)
+                try:
+                    with urllib.request.urlopen(retry_req, timeout=timeout) as resp:
+                        data = resp.read().decode("utf-8")
+                        return resp.getcode(), json.loads(data) if data else {}
+                except urllib.error.HTTPError as e2:
+                    e = e2
+                except Exception as e_retry:
+                    return 0, {"error": str(e_retry)}
         err_body = e.read().decode("utf-8", errors="replace")
         try:
             return e.code, json.loads(err_body)
@@ -305,11 +413,14 @@ ds_gcs_id = f"ds-{SERVICE_NAME}-gcs"
 active_datastores = []
 
 def resolve_assistant_engine():
+    auth_errors = []
     for loc in ["global", "us", "eu"]:
         ep = "discoveryengine.googleapis.com" if loc == "global" else f"{loc}-discoveryengine.googleapis.com"
         base_url = f"https://{ep}/v1alpha/projects/{PROJECT_ID}/locations/{loc}/collections/default_collection"
         code, resp = api_call("GET", f"{base_url}/engines")
-        if code == 200:
+        if code in (401, 403):
+            auth_errors.append(f"{loc}: HTTP {code} ({str(resp)[:80]})")
+        elif code == 200:
             for eng in resp.get("engines", []):
                 eng_name = eng.get("name", "")
                 eng_id = eng_name.split("/")[-1]
@@ -317,12 +428,13 @@ def resolve_assistant_engine():
                 if ast_code == 200 and "assistants" in ast_resp:
                     for ast in ast_resp.get("assistants", []):
                         if ast.get("name", "").endswith("default_assistant"):
-                            return loc, eng_id, base_url, eng
+                            return loc, eng_id, base_url, eng, ""
                 if "SUBSCRIPTION_TIER_SEARCH_AND_ASSISTANT" in str(eng):
-                    return loc, eng_id, base_url, eng
-    return DATASTORE_LOCATION, None, f"https://discoveryengine.googleapis.com/v1alpha/projects/{PROJECT_ID}/locations/{DATASTORE_LOCATION}/collections/default_collection", None
+                    return loc, eng_id, base_url, eng, ""
+    err = "; ".join(auth_errors) if auth_errors else ""
+    return DATASTORE_LOCATION, None, f"https://discoveryengine.googleapis.com/v1alpha/projects/{PROJECT_ID}/locations/{DATASTORE_LOCATION}/collections/default_collection", None, err
 
-target_loc, target_engine_id, base_engine_url, target_engine_obj = resolve_assistant_engine()
+target_loc, target_engine_id, base_engine_url, target_engine_obj, engine_disc_err = resolve_assistant_engine()
 
 # No Gemini Enterprise app in this project means setup_and_deploy.sh had nothing
 # to create the datastores against and nothing to register the agent with - it
@@ -330,9 +442,15 @@ target_loc, target_engine_id, base_engine_url, target_engine_obj = resolve_assis
 # a missing datastore as if something had gone wrong and Layer 7 print a heading
 # with nothing under it.
 if not target_engine_id:
-    record_check("Gemini Enterprise", "App (Engine) Discovery", "WARN",
-                 "No app with a default_assistant in this project",
-                 "DataStores and agent registration were skipped - create the app, then re-run this script")
+    if engine_disc_err:
+        record_check("Gemini Enterprise", "App (Engine) Discovery", "FAIL",
+                     f"Authentication / Authorization Failed ({engine_disc_err})",
+                     "Discovery Engine API rejected credentials. Re-authentication required.")
+        print_auth_guidance(PROJECT_ID)
+    else:
+        record_check("Gemini Enterprise", "App (Engine) Discovery", "WARN",
+                     "No app with a default_assistant in this project",
+                     "DataStores and agent registration were skipped - create the app, then re-run this script")
 
 if RAG_MODE and target_engine_id:
     base_ds_url = f"https://{'discoveryengine.googleapis.com' if target_loc == 'global' else f'{target_loc}-discoveryengine.googleapis.com'}/v1alpha/projects/{PROJECT_ID}/locations/{target_loc}/collections/default_collection"
@@ -458,8 +576,21 @@ def ensure_authorization():
 
 def register_agent(auth_arg, loc, app_id):
     """Run scripts/register_agent.py and return the agent id it printed."""
+    global TOKEN
+    fresh_tok = get_auth_token()
+    if fresh_tok:
+        TOKEN = fresh_tok
     if not os.path.exists("scripts/register_agent.py") or not SERVICE_URL:
         return "", "register_agent.py or the Cloud Run URL is unavailable"
+    # Ensure Discovery Engine service account has roles/run.invoker on Cloud Run
+    if PROJECT_NUMBER and SERVICE_NAME and REGION:
+        de_sa = f"service-{PROJECT_NUMBER}@gcp-sa-discoveryengine.iam.gserviceaccount.com"
+        subprocess.run([
+            "gcloud", "run", "services", "add-iam-policy-binding", SERVICE_NAME,
+            f"--project={PROJECT_ID}", f"--region={REGION}",
+            f"--member=serviceAccount:{de_sa}",
+            "--role=roles/run.invoker"
+        ], capture_output=True, text=True)
     res = subprocess.run(
         ["python3", "scripts/register_agent.py", loc, PROJECT_ID, loc, app_id,
          TOKEN, SERVICE_NAME, SERVICE_URL,
@@ -531,11 +662,6 @@ try:
                 # Check 7.2: Authorization format
                 auth_cfg = found_agent.get("authorizationConfig", {}).get("agentAuthorization", "")
                 if not auth_cfg and WORKSPACE_ON:
-                    # Registered without end-user OAuth: either the authorization
-                    # resource did not exist when setup ran (its 404 is what
-                    # fails the whole registration, so this is also what the
-                    # register-without-auth fallback leaves behind), or the demo
-                    # predates that step. Create the resource, then bind it.
                     auth_ok, auth_detail = ensure_authorization()
                     if auth_ok:
                         fixed_auth = f"projects/{PROJECT_NUMBER}/locations/global/authorizations/{AUTH_ID}"
@@ -564,11 +690,6 @@ try:
                 else:
                     record_check("Agent Registry", "Direct Chat Link", "WARN", "No configId on the app's default widget config", "Reach the agent from the Gemini Enterprise console instead")
             else:
-                # Detection without repair is what made this layer useless in
-                # the case it exists for: a registration that 404s on a missing
-                # authorization leaves the demo with no agent and no chat link,
-                # and the deploy still exits 0. Create what is missing and
-                # register, here, rather than telling the operator to.
                 auth_arg = ""
                 if WORKSPACE_ON:
                     auth_ok, auth_detail = ensure_authorization()
@@ -578,8 +699,6 @@ try:
                         record_check("Agent Registry", "Workspace Authorization", "WARN", "Could not provision the authorization", auth_detail[:100])
                 new_id, reg_err = register_agent(auth_arg, target_loc, target_engine_id)
                 if not new_id and auth_arg:
-                    # Same fallback the setup script takes: an agent with
-                    # degraded Workspace tools beats no agent at all.
                     new_id, reg_err = register_agent("", target_loc, target_engine_id)
                     if new_id:
                         record_check("Agent Registry", "Workspace Authorization", "WARN", "Registered WITHOUT end-user OAuth", "The authorization was refused; Workspace tools run as the service account")
@@ -588,8 +707,16 @@ try:
                     record_check("Agent Registry", "Agent Registration", "HEALED", f"Registered agent {new_id} via register_agent.py", link or "No direct chat link (the app has no widget configId)")
                 else:
                     record_check("Agent Registry", "Agent Registration", "FAIL", "Agent missing and re-registration failed", reg_err or "see register_agent.py output")
+                    print_auth_guidance(PROJECT_ID)
+        elif ag_code in (401, 403):
+            record_check("Agent Registry", "Assistants Query", "FAIL", f"HTTP {ag_code} (Authentication/Authorization Denied)", str(ag_resp)[:160])
+            print_auth_guidance(PROJECT_ID)
         else:
-            record_check("Agent Registry", "Assistants Query", "WARN", f"HTTP {ag_code}", str(ag_resp)[:100])
+            record_check("Agent Registry", "Assistants Query", "FAIL", f"HTTP {ag_code}", str(ag_resp)[:160])
+    else:
+        record_check("Agent Registry", "Registration Skipped", "FAIL" if engine_disc_err else "WARN",
+                     "No target Gemini Enterprise engine available",
+                     "Cannot register agent into nonexistent or unauthenticated engine")
 except Exception as e:
     record_check("Agent Registry", "Verification", "FAIL", "Error verifying Agent Registry", str(e)[:100])
 
@@ -685,5 +812,7 @@ if failed_checks == 0:
     print("🎉 DEPLOYMENT HEALTH STATUS: 100% HEALTHY & VERIFIED READY FOR DEMO!")
     sys.exit(0)
 else:
-    print("⚠️ DEPLOYMENT HEALTH STATUS: Some checks require operator attention.")
+    print("❌ DEPLOYMENT HEALTH STATUS: Critical checks failed. Automated self-healing could not complete.")
+    print("   Please review the failures above, follow the guidance, and re-run:")
+    print("     $ python3 scripts/verify_and_heal.py")
     sys.exit(1)
