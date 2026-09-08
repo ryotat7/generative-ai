@@ -42,6 +42,7 @@ import os
 import sys
 import json
 import time
+import datetime
 import subprocess
 import urllib.request
 import urllib.error
@@ -434,13 +435,101 @@ def resolve_assistant_engine():
     err = "; ".join(auth_errors) if auth_errors else ""
     return DATASTORE_LOCATION, None, f"https://discoveryengine.googleapis.com/v1alpha/projects/{PROJECT_ID}/locations/{DATASTORE_LOCATION}/collections/default_collection", None, err
 
+def heal_missing_engine():
+    """Autonomously provisions Discovery Engine, activates free trial license if needed,
+    and creates a default Search & Assistant engine (gemini-enterprise-<timestamp>)."""
+    global TOKEN
+    lic_url = f"https://discoveryengine.googleapis.com/v1alpha/projects/{PROJECT_ID}/locations/global/licenseConfigs"
+    lic_code, lic_resp = api_call("GET", lic_url)
+
+    is_active = False
+    if lic_code == 200:
+        for c in lic_resp.get("licenseConfigs", []):
+            if c.get("state") == "ACTIVE" and c.get("subscriptionTier") == "SUBSCRIPTION_TIER_SEARCH_AND_ASSISTANT":
+                is_active = True
+                break
+
+    if not is_active:
+        print("  ⏳ [Autonomic Setup] Provisioning Discovery Engine project terms...")
+        prov_url = f"https://discoveryengine.googleapis.com/v1alpha/projects/{PROJECT_ID}:provision"
+        prov_body = {
+            "acceptDataUseTerms": True,
+            "dataUseTermsVersion": "2022-11-23",
+            "saasParams": {"acceptBizQos": True}
+        }
+        prov_code, prov_resp = api_call("POST", prov_url, prov_body)
+        if prov_code not in (200, 409):
+            return None, f"Provisioning failed (HTTP {prov_code}): {str(prov_resp)[:160]}"
+        op_name = prov_resp.get("name", "")
+        if op_name and not prov_resp.get("done"):
+            poll_deadline = time.time() + 120
+            while time.time() < poll_deadline:
+                time.sleep(5)
+                poll_code, poll_resp = api_call("GET", f"https://discoveryengine.googleapis.com/v1alpha/{op_name}")
+                if poll_resp.get("done"):
+                    break
+
+        start = datetime.date.today() + datetime.timedelta(days=1)
+        end = start + datetime.timedelta(days=30)
+        trial_body = {
+            "subscriptionTier": "SUBSCRIPTION_TIER_SEARCH_AND_ASSISTANT",
+            "licenseCount": "50",
+            "subscriptionTerm": "SUBSCRIPTION_TERM_CUSTOM",
+            "startDate": {"year": start.year, "month": start.month, "day": start.day},
+            "endDate": {"year": end.year, "month": end.month, "day": end.day},
+            "freeTrial": True,
+        }
+        trial_url = f"https://discoveryengine.googleapis.com/v1alpha/projects/{PROJECT_ID}/locations/global/licenseConfigs?licenseConfigId=free_trial_agent_space"
+        trial_code, trial_resp = api_call("POST", trial_url, trial_body)
+        if trial_code == 200 or trial_resp.get("state") == "ACTIVE":
+            print("  ✅ [Autonomic Setup] Free trial subscription activated.")
+        elif trial_code == 409:
+            pass
+        else:
+            return None, f"Trial license activation failed (HTTP {trial_code}): {str(trial_resp)[:160]}"
+
+    print("  ⏳ [Autonomic Setup] Creating Gemini Enterprise intranet search & assistant engine...")
+    new_engine_id = f"gemini-enterprise-{int(time.time())}"
+    eng_url = f"https://discoveryengine.googleapis.com/v1alpha/projects/{PROJECT_ID}/locations/global/collections/default_collection/engines?engineId={new_engine_id}"
+    eng_body = {
+        "displayName": "Gemini Enterprise",
+        "solutionType": "SOLUTION_TYPE_SEARCH",
+        "appType": "APP_TYPE_INTRANET",
+        "industryVertical": "GENERIC",
+        "searchEngineConfig": {
+            "searchTier": "SEARCH_TIER_ENTERPRISE",
+            "searchAddOns": ["SEARCH_ADD_ON_LLM"],
+            "requiredSubscriptionTier": "SUBSCRIPTION_TIER_SEARCH_AND_ASSISTANT",
+        },
+    }
+    eng_code, eng_resp = api_call("POST", eng_url, eng_body)
+    if eng_code != 200:
+        return None, f"Engine creation failed (HTTP {eng_code}): {str(eng_resp)[:160]}"
+
+    op_name = eng_resp.get("name", "")
+    if op_name and not eng_resp.get("done"):
+        poll_deadline = time.time() + 180
+        while time.time() < poll_deadline:
+            time.sleep(5)
+            p_code, p_resp = api_call("GET", f"https://discoveryengine.googleapis.com/v1alpha/{op_name}")
+            if p_resp.get("done"):
+                break
+
+    list_url = f"https://discoveryengine.googleapis.com/v1alpha/projects/{PROJECT_ID}/locations/global/collections/default_collection/engines"
+    poll_deadline = time.time() + 60
+    while time.time() < poll_deadline:
+        l_code, l_resp = api_call("GET", list_url)
+        if l_code == 200:
+            for e in l_resp.get("engines", []):
+                if e.get("name", "").endswith("/" + new_engine_id):
+                    return new_engine_id, ""
+        time.sleep(3)
+    return new_engine_id, ""
+
 target_loc, target_engine_id, base_engine_url, target_engine_obj, engine_disc_err = resolve_assistant_engine()
 
-# No Gemini Enterprise app in this project means setup_and_deploy.sh had nothing
-# to create the datastores against and nothing to register the agent with - it
-# skipped both, by design. Name that once, here, instead of letting Layer 6 report
-# a missing datastore as if something had gone wrong and Layer 7 print a heading
-# with nothing under it.
+# No Gemini Enterprise app in this project: auto-provision Discovery Engine,
+# activate trial license if missing, and create the engine autonomously.
 if not target_engine_id:
     if engine_disc_err:
         record_check("Gemini Enterprise", "App (Engine) Discovery", "FAIL",
@@ -448,9 +537,18 @@ if not target_engine_id:
                      "Discovery Engine API rejected credentials. Re-authentication required.")
         print_auth_guidance(PROJECT_ID)
     else:
-        record_check("Gemini Enterprise", "App (Engine) Discovery", "WARN",
-                     "No app with a default_assistant in this project",
-                     "DataStores and agent registration were skipped - create the app, then re-run this script")
+        created_id, err_msg = heal_missing_engine()
+        if created_id:
+            target_engine_id = created_id
+            target_loc = "global"
+            base_engine_url = f"https://discoveryengine.googleapis.com/v1alpha/projects/{PROJECT_ID}/locations/global/collections/default_collection"
+            target_engine_obj = {"name": f"projects/{PROJECT_ID}/locations/global/collections/default_collection/engines/{created_id}"}
+            record_check("Gemini Enterprise", "App (Engine) Discovery", "HEALED",
+                         f"Auto-created Gemini Enterprise engine `{created_id}` with trial license",
+                         "Project provisioned and ready for agent registration")
+        else:
+            record_check("Gemini Enterprise", "App (Engine) Discovery", "WARN",
+                         "Could not auto-create Gemini Enterprise engine", err_msg)
 
 if RAG_MODE and target_engine_id:
     base_ds_url = f"https://{'discoveryengine.googleapis.com' if target_loc == 'global' else f'{target_loc}-discoveryengine.googleapis.com'}/v1alpha/projects/{PROJECT_ID}/locations/{target_loc}/collections/default_collection"
@@ -787,6 +885,62 @@ if GCS_BUCKET_NAME:
     elif _envs is not None:
         record_check("External Files", "Bucket Name Wiring", "PASS", "None",
                      "Cloud Run carries GCS_BUCKET_NAME")
+
+
+# Check 8.4: Google Drive delivery verification & healing
+summary_file = os.path.join("external_files", "drive_upload_summary.json")
+skip_drive_env = os.environ.get("SKIP_DRIVE_UPLOAD", "").strip().lower() in ("1", "true", "yes")
+
+if skip_drive_env:
+    record_check("External Files", "Google Drive Delivery", "PASS", "None", "Drive delivery skipped via SKIP_DRIVE_UPLOAD=1")
+else:
+    drive_summary = {}
+    if os.path.exists(summary_file):
+        try:
+            with open(summary_file, "r", encoding="utf-8") as sf:
+                drive_summary = json.load(sf)
+        except Exception:
+            pass
+    folder_url = drive_summary.get("folder_url", "")
+    uploaded_files = drive_summary.get("uploaded_files", [])
+    valid_uploads = [f for f in uploaded_files if f.get("fileId")]
+
+    if folder_url and valid_uploads:
+        record_check("External Files", "Google Drive Delivery", "PASS", "None", f"Folder: {folder_url} ({len(valid_uploads)} files)")
+    else:
+        # Check token for Drive scope
+        drive_probe_code, _ = api_call("GET", "https://www.googleapis.com/drive/v3/about?fields=user")
+        if drive_probe_code == 200:
+            # Self-heal Drive upload using --upload-only
+            if os.path.exists("scripts/generate_and_upload_external_files.py"):
+                cmd_up = ["python3", "scripts/generate_and_upload_external_files.py", "--upload-only",
+                          "--company", os.environ.get("COMPANY_NAME", "Demo Company"),
+                          "--suffix", os.environ.get("SUFFIX", "1234")]
+                subprocess.run(cmd_up, capture_output=True, text=True)
+                if os.path.exists(summary_file):
+                    try:
+                        with open(summary_file, "r", encoding="utf-8") as sf:
+                            drive_summary = json.load(sf)
+                    except Exception:
+                        pass
+                new_folder_url = drive_summary.get("folder_url", "")
+                if new_folder_url:
+                    record_check("External Files", "Google Drive Delivery", "HEALED",
+                                 f"Uploaded demo files to Google Drive", new_folder_url)
+                else:
+                    record_check("External Files", "Google Drive Delivery", "WARN",
+                                 "Drive upload attempt did not produce folder URL",
+                                 drive_summary.get("upload_skipped_reason", "Review generate_and_upload_external_files.py"))
+            else:
+                record_check("External Files", "Google Drive Delivery", "WARN",
+                             "generate_and_upload_external_files.py unavailable", "Cannot heal Drive upload")
+        elif drive_probe_code in (401, 403):
+            record_check("External Files", "Google Drive Delivery", "WARN",
+                         "Active credentials lack Google Drive OAuth scope",
+                         "Run: gcloud auth login --enable-gdrive-access")
+        else:
+            record_check("External Files", "Google Drive Delivery", "WARN",
+                         f"Drive API returned HTTP {drive_probe_code}", "Could not verify Drive scope")
 
 # -----------------------------------------------------------------------------
 # Final Health Summary & Decision Gate

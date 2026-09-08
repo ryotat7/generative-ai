@@ -101,7 +101,7 @@ const CONFIG = {
   GITHUB_TOKEN: SCRIPT_PROPS.getProperty('GITHUB_TOKEN'),
   MAX_RETRIES: 3,
   RETRY_DELAY_MS: 1000,
-  APP_VERSION: 'v12.17-public',
+  APP_VERSION: 'v12.19-public',
   // Agent-template source: the generated setup script fetches the static
   // Python/JSON template files (agent_template/ in the repo) at run time.
   // TEMPLATE_REF may be a branch name (default 'main'): it is resolved to a
@@ -6354,7 +6354,7 @@ EOF
     TOKEN=$(gcloud auth print-access-token 2>/dev/null || echo "$TOKEN")
     [ -z "\$TOKEN" ] && TOKEN=$(gcloud auth application-default print-access-token 2>/dev/null || echo "")
     if [ -n "$PROJECT_NUMBER" ]; then
-      DE_SA="service-${PROJECT_NUMBER}@gcp-sa-discoveryengine.iam.gserviceaccount.com"
+      DE_SA="service-$PROJECT_NUMBER@gcp-sa-discoveryengine.iam.gserviceaccount.com"
       gcloud run services add-iam-policy-binding "${dirName}" \
         --project="$PROJECT_ID" --region="$REGION" \
         --member="serviceAccount:\${DE_SA}" \

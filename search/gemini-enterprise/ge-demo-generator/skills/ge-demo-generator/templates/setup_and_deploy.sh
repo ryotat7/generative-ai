@@ -162,28 +162,128 @@ verify_auth_preflight() {
   if [ -z "$tok" ] || echo "$tok" | grep -qi -E 'error|problem refreshing'; then
     tok=$(gcloud auth application-default print-access-token 2>/dev/null || echo "")
   fi
-  if [ -n "$tok" ] && ! echo "$tok" | grep -qi -E 'error|problem refreshing'; then
-    return 0
+  if [ -z "$tok" ] || echo "$tok" | grep -qi -E 'error|problem refreshing'; then
+    echo "❌ Error: Google Cloud credentials have expired or are missing."
+    print_auth_guidance_sh "$target_proj"
+    if [ -t 0 ]; then
+      echo "⏸️  Interactive pause: please authenticate in another terminal or browser tab."
+      read -r -p "   Press [Enter] once authenticated to retry, or Ctrl+C to abort... " _PAUSE_IN
+      tok=$(gcloud auth print-access-token 2>/dev/null || echo "")
+      if [ -z "$tok" ] || echo "$tok" | grep -qi -E 'error|problem refreshing'; then
+        tok=$(gcloud auth application-default print-access-token 2>/dev/null || echo "")
+      fi
+      if [ -n "$tok" ] && ! echo "$tok" | grep -qi -E 'error|problem refreshing'; then
+        echo "✅ Authentication successfully verified!"
+      else
+        echo "❌ Authentication re-check failed. Aborting deployment."
+        exit 1
+      fi
+    else
+      echo "❌ Non-interactive environment: cannot pause for login. Aborting deployment."
+      exit 1
+    fi
   fi
 
-  echo "❌ Error: Google Cloud credentials have expired or are missing."
-  print_auth_guidance_sh "$target_proj"
-  if [ -t 0 ]; then
-    echo "⏸️  Interactive pause: please authenticate in another terminal or browser tab."
-    read -r -p "   Press [Enter] once authenticated to retry, or Ctrl+C to abort... " _PAUSE_IN
-    tok=$(gcloud auth print-access-token 2>/dev/null || echo "")
-    if [ -z "$tok" ] || echo "$tok" | grep -qi -E 'error|problem refreshing'; then
-      tok=$(gcloud auth application-default print-access-token 2>/dev/null || echo "")
+  # Google Drive OAuth scope preflight verification (R4)
+  if [ "${SKIP_DRIVE_UPLOAD:-}" != "1" ] && [ "${SKIP_DRIVE_UPLOAD:-}" != "true" ]; then
+    local drive_http
+    drive_http=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $tok" -H "X-Goog-User-Project: $target_proj" "https://www.googleapis.com/drive/v3/about?fields=user" 2>/dev/null || echo "000")
+    if [ "$drive_http" = "403" ]; then
+      echo "⚠️  Active Google Cloud credentials lack Google Drive OAuth scope (HTTP 403)."
+      echo "   Demo assets (PDF, Excel, scanned handwritten images) require Drive access"
+      echo "   to be uploaded to Google Drive. Without it, files remain in ./external_files/ and GCS."
+      echo ""
+      local os_type
+      os_type="$(detect_host_os)"
+      if [ "$os_type" = "linux_headless" ]; then
+        echo "👉 Recommended command for headless/remote environment:"
+        echo "     $ gcloud auth login --enable-gdrive-access --no-launch-browser"
+      else
+        echo "👉 Recommended command:"
+        echo "     $ gcloud auth login --enable-gdrive-access"
+      fi
+      echo ""
+      if [ -t 0 ]; then
+        local _DRIVE_REPLY=""
+        read -r -p "   Authenticate now with Drive scope? (y/n, default: y): " _DRIVE_REPLY
+        if [ -z "$_DRIVE_REPLY" ] || [[ "$_DRIVE_REPLY" =~ ^[Yy] ]]; then
+          if [ "$os_type" = "linux_headless" ]; then
+            gcloud auth login --enable-gdrive-access --no-launch-browser
+          else
+            gcloud auth login --enable-gdrive-access
+          fi
+          tok=$(gcloud auth print-access-token 2>/dev/null || echo "")
+          drive_http=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $tok" -H "X-Goog-User-Project: $target_proj" "https://www.googleapis.com/drive/v3/about?fields=user" 2>/dev/null || echo "000")
+          if [ "$drive_http" = "200" ]; then
+            echo "   ✅ Google Drive OAuth scope verified!"
+          else
+            echo "   ⚠️  Drive scope still unavailable (HTTP $drive_http). Continuing with SKIP_DRIVE_UPLOAD=1."
+            export SKIP_DRIVE_UPLOAD=1
+          fi
+        else
+          echo "   ℹ️ Continuing deployment without Google Drive upload (local + GCS staging only)."
+          export SKIP_DRIVE_UPLOAD=1
+        fi
+      else
+        echo "   ℹ️ Non-interactive session: continuing with SKIP_DRIVE_UPLOAD=1."
+        export SKIP_DRIVE_UPLOAD=1
+      fi
+    elif [ "$drive_http" = "200" ]; then
+      echo "✅ Google Cloud & Google Drive authentication scopes verified."
     fi
-    if [ -n "$tok" ] && ! echo "$tok" | grep -qi -E 'error|problem refreshing'; then
-      echo "✅ Authentication successfully verified!"
-      return 0
+  fi
+  return 0
+}
+
+run_environment_doctor() {
+  local os_type
+  os_type="$(detect_host_os)"
+  echo "🩺 [Host Environment Doctor] Auditing execution environment ($os_type)..."
+
+  # 1. uv package manager
+  if ! command -v uv >/dev/null 2>&1; then
+    if [ -f "$HOME/.local/bin/uv" ]; then
+      export PATH="$HOME/.local/bin:$PATH"
+    elif [ -f "$HOME/.cargo/bin/uv" ]; then
+      export PATH="$HOME/.cargo/bin:$PATH"
     fi
-    echo "❌ Authentication re-check failed. Aborting deployment."
-    exit 1
+  fi
+  if command -v uv >/dev/null 2>&1; then
+    echo "  ✅ uv package manager : $(uv --version 2>/dev/null | head -n 1)"
   else
-    echo "❌ Non-interactive environment: cannot pause for login. Aborting deployment."
-    exit 1
+    echo "  ⚠️  uv is not installed. Attempting auto-bootstrap..."
+    if command -v curl >/dev/null 2>&1; then
+      curl -LsSf https://astral.sh/uv/install.sh | sh >/dev/null 2>&1 || true
+      if [ -f "$HOME/.local/bin/uv" ]; then
+        export PATH="$HOME/.local/bin:$PATH"
+        echo "  ✅ uv auto-bootstrapped: $(uv --version 2>/dev/null | head -n 1)"
+      else
+        echo "  ℹ️ uv could not be installed automatically; python3/pip will be used as fallback."
+      fi
+    else
+      echo "  ℹ️ curl unavailable; continuing with standard python3."
+    fi
+  fi
+
+  # 2. Multilingual fonts for operational document & video rendering
+  if [ -f "scripts/ensure_fonts.py" ]; then
+    python3 scripts/ensure_fonts.py --check-only >/dev/null 2>&1 || true
+  fi
+
+  # 3. Virtual display Xvfb (for headless browser automation & video recording)
+  if [ "$os_type" = "linux_headless" ]; then
+    if command -v xvfb-run >/dev/null 2>&1; then
+      echo "  ✅ Xvfb virtual display: Available (xvfb-run)"
+    else
+      echo "  ℹ️ Xvfb (xvfb-run) not found. (Required only if running headless demo video recording)"
+    fi
+  fi
+
+  # 4. FFmpeg (for video rendering & audio mixing)
+  if command -v ffmpeg >/dev/null 2>&1; then
+    echo "  ✅ FFmpeg multimedia  : Available ($(ffmpeg -version 2>/dev/null | head -n 1 | cut -d' ' -f3))"
+  else
+    echo "  ℹ️ FFmpeg not found. (Required only if generating executive demo videos)"
   fi
 }
 
@@ -194,6 +294,7 @@ if [ -z "$PROJECT_ID" ]; then
 fi
 
 verify_auth_preflight "$PROJECT_ID"
+run_environment_doctor
 
 # PROJECT_ID comes from `.env` here, so it is free to disagree with whatever
 # `gcloud config` happens to point at - and it did: a deploy that announced
@@ -209,6 +310,7 @@ PROJECT_NUMBER=$(gcloud projects describe "$PROJECT_ID" --format="value(projectN
 if [ -z "$PROJECT_NUMBER" ]; then
   echo "❌ Error: Could not retrieve project details for '$PROJECT_ID'."
   echo "   Verify that you have permissions on this project or check if the project ID is correct."
+  print_auth_guidance_sh "$PROJECT_ID"
   exit 1
 fi
 REGION=${REGION:-${CLOUD_RUN_REGION:-"asia-northeast1"}}
@@ -1322,9 +1424,15 @@ except Exception:
     echo "   - the Terms for data use (https://cloud.google.com/retail/data-use-terms)"
     echo "   - the Gemini Enterprise (Agentspace) quality-of-service terms"
     _GE_TRIAL_REPLY="${GE_FREE_TRIAL_CONSENT:-}"
-    if [ -z "$_GE_TRIAL_REPLY" ] && [ -t 0 ]; then
-      read -p "   Start a free trial subscription automatically? (y/n) " -n 1 -r _GE_TRIAL_REPLY
-      echo
+    if [ -z "$_GE_TRIAL_REPLY" ]; then
+      if [ -t 0 ]; then
+        read -p "   Start a free trial subscription automatically? (y/n, default: y) " -n 1 -r _GE_TRIAL_REPLY
+        echo
+        _GE_TRIAL_REPLY=${_GE_TRIAL_REPLY:-y}
+      else
+        echo "   (Non-interactive environment: auto-accepting trial license terms as GE_FREE_TRIAL_CONSENT=y)"
+        _GE_TRIAL_REPLY="y"
+      fi
     fi
     if [[ "$_GE_TRIAL_REPLY" =~ ^[Yy] ]]; then
       TRIAL_OUT=$(

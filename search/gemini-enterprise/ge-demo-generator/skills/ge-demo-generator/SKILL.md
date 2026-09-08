@@ -835,7 +835,7 @@ python3 scripts/verify_and_heal.py
    - Verifies registered agent URL strictly ends with `/a2a/app`, auto-patches Gemini Enterprise agent card if missing, and verifies Authorization resource formatting (`projects/${PROJECT_NUMBER}/...`).
    - Resolves direct chat link `https://vertexaisearch.cloud.google.com/home/cid/${CONFIG_ID}/r/agent/${AGENT_ID}/session/-`.
    - **Fail-Fast & Zero False Positives**: If registration fails or authentication is rejected (HTTP 401/403), records `FAIL` (never `WARN`), prints tailored host OS authentication commands, and exits with code 1.
-8. **Layer 8: External Files & Google Drive**: Verifies external PDF, Excel, and Scanned Image files staging.
+8. **Layer 8: External Files & Google Drive Delivery**: Verifies external PDF, Excel, and Scanned Image files staging in GCS, and audits `external_files/drive_upload_summary.json` for deterministic delivery to the target Google Drive folder. If Drive upload is missing or incomplete, dynamically probes Drive token scope and autonomously executes `generate_and_upload_external_files.py --upload-only` to self-heal.
 9. **Layer 9: AI Governance & Telemetry**: Audits and auto-grants `roles/cloudtrace.agent` and `roles/modelarmor.user` to the Compute Service Account.
 
 ### 🛡️ Autonomous Self-Healing & Zero-Touch Deployment Protocol (MANDATORY INVARIANT)
