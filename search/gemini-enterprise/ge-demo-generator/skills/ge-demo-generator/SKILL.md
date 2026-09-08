@@ -3,10 +3,10 @@ name: ge-demo-generator
 description: Synthesizes and deploys complete, domain-specific Gemini Enterprise demo environments directly to Google Cloud. Use when the user asks to create an AI agent demo for any customer domain (e.g. 'example.com', 'example.co.jp', 'example.de', 'example.fr' - any company, any industry, any region) or business goal, generate realistic BigQuery/Firestore sample datasets, create external demo files (PDF, Excel, scanned images), stage them in Cloud Storage and upload them to the deploying account's Google Drive, scaffold ADK multi-agent architectures with MCP tools and A2UI cards, deploy to Cloud Run, publish to Gemini Enterprise, and generate 7 structured demo prompts in any language. Confirms the requirements interactively and presents a demo architecture & data model plan (Mermaid ER diagram, external file lineage, target project) for approval before anything is deployed. Also triggered by /ge-demo-generator.
 metadata:
   author: Google Cloud Customer Engineering
-  version: 2.17.0
+  version: 2.20.0
 ---
 
-# GE Demo Generator Skill (v2.17.0)
+# GE Demo Generator Skill (v2.20.0)
 
 Synthesizes production-grade, domain-tailored AI agent demo environments using **Gemini 3.8 Flash** for reasoning and **Gemini 3.1 Flash Image** for visual generation, adhering to a strict **6-step infrastructure dependency graph**, rich **A2UI interactive component streaming**, **Google Workspace OAuth authorization**, **external sample files staged in Cloud Storage and, when the credentials carry the Drive scope, in the deploying account's Google Drive**, **7 structured demo prompts**, **automated browser video recording & Remotion highlight reel delivery to Google Drive**, and **global multilingual localization (i18n/l10n)**.
 
@@ -189,6 +189,21 @@ demo will have no Google Drive copy of the sample documents at all**. That is a 
 brief has to state, not discover at deploy time — see brief sections 3 and 5. It is also one
 command to fix, so say it now: `gcloud auth login --enable-gdrive-access --no-launch-browser` (using `--no-launch-browser` since an agentic IDE terminal usually has no local browser), then re-read.
 
+#### Multi-OS Google Cloud Authentication & Setup Protocol
+Before proceeding with deployment, verify both user CLI authentication (`gcloud auth print-access-token`) and Application Default Credentials (`gcloud auth application-default print-access-token`). If missing or expired:
+- **Interactive TTY Mode (`[ -t 0 ]`)**: The script automatically detects the host OS environment, prints the tailored authentication commands, and pauses (`read -p`), allowing the user to authenticate in a separate terminal or browser window and resume seamlessly by pressing Enter.
+- **Non-Interactive / CI Mode**: Strictly fail-fast (Exit 1) with descriptive error logs and the single command to resume.
+- **Host OS Detection & Authentication Matrix**:
+
+  | Host OS / Environment | Detection Signal | Authentication Commands | Notes |
+  |---|---|---|---|
+  | **Linux / Remote VM (Headless)** | No `$DISPLAY`, SSH, or Cloud Shell | `gcloud auth login --enable-gdrive-access --no-launch-browser`<br>`gcloud auth application-default login --no-launch-browser`<br>`gcloud auth application-default set-quota-project $PROJECT_ID` | Copy verification URL to local browser, sign in, and paste auth code back. |
+  | **macOS (Terminal / iTerm)** | `uname -s == Darwin` | `gcloud auth login --enable-gdrive-access`<br>`gcloud auth application-default login`<br>`gcloud auth application-default set-quota-project $PROJECT_ID` | Browser opens automatically for OAuth consent. |
+  | **Windows (WSL / WSL2)** | `/proc/version` contains `microsoft` or `wsl` | `gcloud auth login --enable-gdrive-access`<br>`gcloud auth application-default login`<br>`gcloud auth application-default set-quota-project $PROJECT_ID` | If browser interop is disabled, append `--no-launch-browser`. |
+  | **Linux Desktop (GUI)** | Linux with active `$DISPLAY` | `gcloud auth login --enable-gdrive-access`<br>`gcloud auth application-default login`<br>`gcloud auth application-default set-quota-project $PROJECT_ID` | Browser opens automatically for OAuth consent. |
+
+- **Quota Project Auto-Configuration**: The deployment script and self-healing engine automatically execute `gcloud auth application-default set-quota-project $PROJECT_ID` to prevent HTTP 403 `PERMISSION_DENIED: The discoveryengine.googleapis.com API requires a quota project`.
+
 #### Deployer IAM Audit & Autonomous Self-Healing Protocol
 To guarantee a seamless zero-touch deployment, probe whether the deploying account `${GCP_ACCOUNT}` possesses the necessary permissions on `${PROJECT_ID}`:
 
@@ -217,11 +232,11 @@ gcloud projects add-iam-policy-binding "$PROJECT_ID" \
    - If `${GCP_ACCOUNT}` lacks `roles/resourcemanager.projectIamAdmin` or `roles/owner` and `gcloud projects describe` or service checks return `PERMISSION_DENIED`:
    - **DO NOT** stop with a vague error or ask the user to manually run setup scripts in their terminal.
    - Present the exact, copy-pasteable command for their Google Cloud Project Administrator:
-```text
-gcloud projects add-iam-policy-binding "$PROJECT_ID" \
-  --member="user:$GCP_ACCOUNT" \
-  --role="roles/owner"
-```
+     ```text
+     gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+       --member="user:$GCP_ACCOUNT" \
+       --role="roles/owner"
+     ```
    - Prompt the user interactively (using `ask_question` if available) to notify their administrator or switch accounts (`gcloud config set account <admin-account>`), then cleanly re-test and proceed with automated deployment.
 
 3. **Capsule / Sandbox Policy Detection**:
@@ -353,7 +368,7 @@ something the agent will do later — nothing after the deploy writes to a Drive
    real switch in the deployed container, so an option discussed here but not written to
    `.env` is a feature the demo will not have.
 
-   **List all nine, every time**, in this order, with the value this deploy will use in the
+   **List all eleven, every time**, in this order, with the value this deploy will use in the
    second column — `✅ true` / `❌ false` / the literal value / `— (unset)`. An option the
    brief leaves out is an option the user cannot ask for: they do not know it exists, and by
    the time the deploy banner mentions it the 15-30 minutes are already spent. The gate is the
@@ -364,6 +379,8 @@ something the agent will do later — nothing after the deploy writes to a Drive
    | Option | This demo | Default | What it buys, and what it costs |
    |---|---|---|---|
    | 🤖 `enableManagedAgent` | `<value>` | **`true`** | Agent Engine Sandbox code execution, asynchronous background delegation (`delegate_autonomous_task`), scheduled tasks and Drive deliverable exports. The delegation prompts in the demo playbook exercise this, which is why it is the one default-on capability. Adds ~8-10 min of provisioning, overlapped with the rest of the deploy. |
+   | 📡 `enableCloudTelemetry` | `<value>` | **`true`** | OpenTelemetry Cloud Trace instrumentation. Fully tracks per-turn LLM token consumption (`input_tokens`, `output_tokens`), latency breakdown waterfall, and tool execution. PII-safe via `NO_CONTENT` (zero chat prompt text transmitted), 0ms warm-turn overhead (async background batching), and free under monthly Cloud Trace quota. Set to `false` to opt out. |
+   | 🛡️ `enableModelArmor` | `<value>` | `false` | Vertex AI Agent Platform Model Armor integration. Enforces prompt injection & jailbreak defense, automatic sensitive data protection (SDP credentials/PII masking), and RAI safety filters. Auto-provisions and binds `ge-demo-default-armor` in `us-central1` if no custom template is specified. |
    | 🔎 `dataExplorationMode` | `<value>` | **`mcp`** | How the agent reads the demo's data. **`mcp`** (default) provisions no search index: the data-asset catalog is already in the agent's system instruction, so a figure question is *one* `execute_sql` call — the four-to-five round trips people blame on "no index" came from the metadata expedition in front of the query, and the mcp routing block overrides exactly that. **`rag`** additionally builds a Discovery Engine index over the BigQuery dataset and the staged files and makes it the read path: lookups and document questions return in one sub-second `search_datastore` call, while computed figures, joins and every write stay on MCP because the index lags the tables. Pick `rag` when the demo turns on documents rather than on numbers, and note it also attaches data stores to the (often shared) Gemini Enterprise app — see `references/datastore_connectors.md`. |
    | 📁 `enableDatastoreFs` | `<value>` | `false` | When `dataExplorationMode=rag`, provisions a semi-structured Discovery Engine DataStore (`ds-${SERVICE_NAME}-fs`) from `FIRESTORE_COLLECTION` via `FirestoreSource` (GCS export staging). Enables semantic search over historical incident tickets, resolved remediation logs, and SOP archives. Note: live task mutations, approvals, and Operations Viewer synchronization continue to use Firestore MCP for sub-100ms real-time state tracking. |
    | 🔑 `enableWorkspaceAuth` | `<value>` | `false` | User-OAuth passthrough — the agent acts as the signed-in user for the Drive handoff and Workspace token plumbing. Commonly wanted, since Workspace is usually available in the target environment, but **not** default-on: some organizations refuse to authorize an OAuth client they have not vetted, and there sign-in fails for every demo user. Confirm the target org permits it before enabling. |
@@ -398,17 +415,23 @@ unset) flips an existing demo either way.
 
 ### § The gate — ask once, then stop
 
-Close the message with a single explicit question, in the demo's language, that (a) names what
-approving will run — synthetic data generation, Google Drive upload, Cloud Run deploy, Gemini
-Enterprise registration (Phases 3-7) — and (b) leaves the door open for late changes:
+Close the message by triggering an interactive approval and option selection modal using the `ask_question` tool (with plain text fallback only if `ask_question` is not supported in the active environment). This allows the user to review all capabilities and toggle any extra features directly:
 
-> Shall I proceed with this design and run the synthetic data generation, Google Drive upload,
-> Cloud Run deployment and Gemini Enterprise registration (Phases 3-7) in one pass? Let me know
-> if you want any option enabled (Google Workspace OAuth, RAG mode, data scale, a warm Cloud
-> Run instance for a live session, …) or any part of the model changed.
+- Call `ask_question` with `is_multi_select: true`:
+  - `question`: "Do you approve this architecture and deployment plan? Select '(Recommended) Proceed with default configuration' to start deployment immediately, or check any additional options you want enabled:" (in the demo's language)
+  - `options`:
+    1. `"(Recommended) Proceed with default configuration (Managed Agent: Enabled, Cloud Trace Telemetry: Enabled, other options: default)"`
+    2. `"🛡️ Enable Model Armor Guardrails (Auto-provisions and binds ge-demo-default-armor in us-central1 for jailbreak defense and PII masking)"`
+    3. `"🔑 Enable Google Workspace OAuth (Drive/Slides/Docs export as signed-in user)"`
+    4. `"🔎 Enable RAG Data Exploration Mode (Build Discovery Engine search index for document & table reads)"`
+    5. `"📁 Enable Firestore DataStore (Semantic search over historical tickets & SOPs in RAG mode)"`
+    6. `"🔥 Enable Warm Instance (Cloud Run min-instances=1 to eliminate cold-start delay)"`
+    7. `"🖥️ Enable Computer Use (Gemini 3.8 Flash Chromium browser automation)"`
+    8. `"📈 Enable Enterprise Data Scale (Grow fact tables to thousands of rows via amplify_data.py)"`
+    9. `"📡 Disable Cloud Trace Telemetry (Opt-out from OpenTelemetry token & latency tracking)"`
 
-One question, not a second round of Step 2.1: everything else was settled before the brief was
-written, and a gate that re-opens five decisions is a gate nobody clears.
+- In non-interactive or headless environments where `ask_question` is unavailable, output the equivalent choices in chat text and pause for user reply.
+- When the user selects options, update `.env` (`ENABLE_MODEL_ARMOR=1`, `ENABLE_WORKSPACE_AUTH=1`, `ENABLE_CLOUD_TELEMETRY=0`, `DATA_EXPLORATION_MODE=rag`, etc.) and deployment flags accordingly before proceeding to Phase 3.
 
 Then **stop and wait**. Do not start Phase 3 in the same turn, and do not treat "looks good" on
 a *previous* message — the scenario choice in Phase 1 or an answer in Step 2.1 — as approval of
@@ -699,7 +722,7 @@ Follow the optimized dependency sequence with local pre-flight checks and fast b
    # complete table and for which variables are applied later, in Step 5.
    MIN_INSTANCES="${MIN_INSTANCES:-0}"   # export MIN_INSTANCES=1 to stay warm for a live demo
                                          # (brief section 6 - it bills while idle, so ask first)
-   gcloud run deploy "$SERVICE_NAME" \
+   gcloud beta run deploy "$SERVICE_NAME" \
      --source . \
      --region "$REGION" \
      --platform managed \
@@ -799,15 +822,21 @@ Immediately after deployment and registration complete, execute the automated 8-
 python3 scripts/verify_and_heal.py
 ```
 
-### The 8-Layer Autonomous Verification & Healing Matrix
+### The 9-Layer Autonomous Verification & Healing Matrix (v2.20.0)
 1. **Layer 1: BigQuery Schema & Primary Keys**: Inspects all tables in `${DATASET_ID}`, verifies row counts, and **auto-heals** missing `_id` document columns (`ALTER TABLE ... ADD COLUMN IF NOT EXISTS _id STRING; UPDATE ... SET _id = <PK>`) to guarantee Discovery Engine DataStore ingestion compatibility.
-2. **Layer 2: Firestore Operations Collection**: Verifies operational task documents count >= 3. Auto-seeds initial documents if missing.
+2. **Layer 2: Firestore Operations Collection**: Verifies operational task documents count >= 3. Auto-seeds initial documents if missing via `setup_fs.py`.
 3. **Layer 3: Data Viewer & IAP**: Verifies Cloud Run dashboard service status and guarantees `roles/run.invoker` binding for `service-${PROJECT_NUMBER}@gcp-sa-iap.iam.gserviceaccount.com`.
-4. **Layer 4: Agent Engine Sandbox**: Confirms Agent Engine Code Sandbox resource accessibility.
+4. **Layer 4: Agent Engine Sandbox**: Confirms Agent Engine Code Sandbox resource accessibility in Vertex AI Agent Platform.
 5. **Layer 5: Cloud Run A2A & Fallback Routing**: Probes `/openapi.json`, `/a2a/app/.well-known/agent-card.json`, and root POST fallback alias `@app_instance.post("/")`.
 6. **Layer 6: Discovery Engine DataStores & Engine Binding**: Inspects indexed document count in `ds-<service>-bq` and `ds-<service>-gcs`, auto-restarts table ingestion if 0 documents, and verifies `dataStoreIds` attachment on the Gemini Enterprise Assistant Engine.
-7. **Layer 7: Agent Registry URL & Authorization**: Verifies registered agent URL strictly ends with `/a2a/app`, auto-patches Gemini Enterprise agent card if missing, and verifies Authorization resource formatting (`projects/${PROJECT_NUMBER}/...`). Resolves direct chat link `https://vertexaisearch.cloud.google.com/home/cid/${CONFIG_ID}/r/agent/${AGENT_ID}/session/-`.
-8. **Layer 8: External Files & Google Drive**: Verifies external PDF, Excel, and Scanned Image files staging.
+7. **Layer 7: Agent Registry URL & Authorization**:
+   - Refreshes auth token dynamically before invocation to prevent expiration during long deploys.
+   - Automatically grants `roles/run.invoker` to `service-${PROJECT_NUMBER}@gcp-sa-discoveryengine.iam.gserviceaccount.com` on Cloud Run.
+   - Verifies registered agent URL strictly ends with `/a2a/app`, auto-patches Gemini Enterprise agent card if missing, and verifies Authorization resource formatting (`projects/${PROJECT_NUMBER}/...`).
+   - Resolves direct chat link `https://vertexaisearch.cloud.google.com/home/cid/${CONFIG_ID}/r/agent/${AGENT_ID}/session/-`.
+   - **Fail-Fast & Zero False Positives**: If registration fails or authentication is rejected (HTTP 401/403), records `FAIL` (never `WARN`), prints tailored host OS authentication commands, and exits with code 1.
+8. **Layer 8: External Files & Google Drive Delivery**: Verifies external PDF, Excel, and Scanned Image files staging in GCS, and audits `external_files/drive_upload_summary.json` for deterministic delivery to the target Google Drive folder. If Drive upload is missing or incomplete, dynamically probes Drive token scope and autonomously executes `generate_and_upload_external_files.py --upload-only` to self-heal.
+9. **Layer 9: AI Governance & Telemetry**: Audits and auto-grants `roles/cloudtrace.agent` and `roles/modelarmor.user` to the Compute Service Account.
 
 ### 🛡️ Autonomous Self-Healing & Zero-Touch Deployment Protocol (MANDATORY INVARIANT)
 
@@ -821,11 +850,13 @@ python3 scripts/verify_and_heal.py
      - **Self-Healing Path**: If `${GCP_ACCOUNT}` has admin rights, immediately execute `gcloud projects add-iam-policy-binding` to grant the missing role (e.g. `roles/run.admin`, `roles/discoveryengine.admin`, `roles/bigquery.admin`, or `roles/iam.serviceAccountUser`) and resume the deployment step.
      - **Service Account Auto-Grant**: If Cloud Run or Discovery Engine reports that `${PROJECT_NUMBER}-compute@developer.gserviceaccount.com` or `service-${PROJECT_NUMBER}@gcp-sa-discoveryengine.iam.gserviceaccount.com` lacks required bindings, auto-grant the specific role directly.
      - **Non-Admin Guidance**: If the user lacks IAM administration permissions, provide the exact copy-pasteable command for their Project Administrator in a `text` block:
-```text
-gcloud projects add-iam-policy-binding "$PROJECT_ID" \
-  --member="user:$GCP_ACCOUNT" \
-  --role="roles/owner"
-```
+
+       ```text
+       gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+         --member="user:$GCP_ACCOUNT" \
+         --role="roles/owner"
+       ```
+
      - Prompt the user interactively (e.g. via `ask_question` or chat) to confirm once the role is granted or to switch to an authorized account (`gcloud config set account <admin-account>`), then seamlessly re-probe and proceed with automated deployment.
 
   2. **API Enablement & Service Directory**:
@@ -963,6 +994,51 @@ The template below is the base progression, before those overrides:
 - **Expected Outcome**: Synthesizes all data sources, produces executive summary infographic, updates records, and logs audit trail.
 - **Watch Point**: (e.g. the closing summary states the before/after cycle time for the instance the whole demo followed)
 ```
+
+### 3. Automated Executive Demo Video Production (/ge-demo-video)
+
+When the user asks to **create a demo video** (e.g. "デモ動画を作成して", "generate a demo video", "record executive video"):
+- **ALWAYS** invoke the dedicated `/ge-demo-video` skill (`npm run demo:video` or `python3 scripts/generate_demo_video.py`).
+- **Strict Invariant**: Never write a custom presentation script, presentation video, or synthetic mock screen from scratch.
+- The `/ge-demo-video` skill connects directly to the deployed agent's live Gemini Enterprise session via Chrome CDP (`localhost:9222`), verifies the live chat input interface, auto-probes and provisions multi-language typography fonts (`ensure_fonts.py`), presents the demonstration plan with `ask_question` for interactive user approval, and records the authentic agent in action.
+
+---
+
+## Executive AI Governance Showcase (Cloud Trace & Model Armor)
+
+For executive roundtables, enterprise security reviews, and AI governance demonstrations:
+- **Cloud Trace Telemetry & Token Tracking**: Enabled by **default** (`ENABLE_CLOUD_TELEMETRY=1`), providing out-of-the-box observability without requiring extra flags. (To opt out, set `ENABLE_CLOUD_TELEMETRY=0`).
+- **Model Armor Guardrails**: Enabled via `ENABLE_MODEL_ARMOR=1`. If no custom template is specified, the deployment script **automatically provisions and binds a standard generic template** (`ge-demo-default-armor` in `us-central1`) configured with Prompt Injection/Jailbreak defense, Sensitive Data Protection (SDP Basic for PII/API key masking), Malicious URI filtering, and Responsible AI safety filters.
+
+### 1. Key Governance Capabilities
+1. **Full-Stack Traceability & Observability (OpenTelemetry + Cloud Trace)**:
+   - Tracks LLM token usage (input tokens, output tokens, cached tokens) out of the box.
+   - Generates distributed trace spans across the entire request lifecycle (`invocation -> agent_run -> call_llm -> execute_tool`).
+   - Automatically masks message content on the wire (`OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=NO_CONTENT`) to preserve privacy and prevent PII leakage into trace logs.
+2. **Sensitive Data Protection & Guardrails (Model Armor)**:
+   - Native Vertex AI Agent Platform Model Armor integration via `types.ModelArmorConfig`.
+   - Real-time protection against prompt injection, jailbreak attempts, and sensitive data (PII/financial data) exfiltration.
+   - Auditable security logs in Security Command Center (SCC) and Model Armor Console.
+
+### 2. Enabling Governance for Demos
+Telemetry is active automatically. To also activate Model Armor guardrails for a demo:
+
+```bash
+# Enable Model Armor guardrails (automatically creates and attaches ge-demo-default-armor in us-central1)
+ENABLE_MODEL_ARMOR=1
+
+# (Optional) Specify a custom existing Model Armor template instead of the default:
+# MODEL_ARMOR_TEMPLATE="projects/<PROJECT_ID>/locations/<LOCATION>/templates/<TEMPLATE_ID>"
+```
+
+### 3. Live Demonstration Walkthrough
+During an executive presentation:
+1. **Show Live Trace Explorer**:
+   - Open `https://console.cloud.google.com/traces/explorer?project=${PROJECT_ID}`.
+   - Demonstrate request latency breakdown, tool execution durations, and exact Gemini token consumption per turn.
+2. **Demonstrate Guardrails / Model Armor**:
+   - Issue a simulated prompt injection or prompt asking for restricted personal data.
+   - Open `https://console.cloud.google.com/security/model-armor?project=${PROJECT_ID}` to show violation logs and blocked/sanitized execution.
 
 ---
 

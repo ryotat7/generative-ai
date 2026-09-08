@@ -80,6 +80,222 @@ fi
 
 GCP_ACCOUNT=${GCP_ACCOUNT:-$(gcloud config get-value account 2>/dev/null || echo "Unknown")}
 PROJECT_ID=${PROJECT_ID:-$(gcloud config get-value project 2>/dev/null)}
+
+detect_host_os() {
+  local uname_s
+  uname_s="$(uname -s 2>/dev/null || echo "")"
+  case "$uname_s" in
+  Darwin*) echo "macos" ;;
+  Linux*)
+    if grep -qi -E 'microsoft|wsl' /proc/version 2>/dev/null; then
+      echo "windows_wsl"
+    elif [ -z "${DISPLAY:-}" ] || [ -n "${SSH_CLIENT:-}" ] || [ -n "${SSH_TTY:-}" ] || [ -n "${CLOUD_SHELL:-}" ]; then
+      echo "linux_headless"
+    else
+      echo "linux_gui"
+    fi
+    ;;
+  CYGWIN* | MINGW* | MSYS*) echo "windows" ;;
+  *) echo "linux_headless" ;;
+  esac
+}
+
+print_auth_guidance_sh() {
+  local target_proj="$1"
+  local os_type
+  os_type="$(detect_host_os)"
+  echo ""
+  echo "================================================================================"
+  echo "💡 ACTION REQUIRED: Google Cloud Authentication & Setup Guide"
+  echo "================================================================================"
+  case "$os_type" in
+  linux_headless)
+    echo "👉 [DETECTED HOST ENVIRONMENT: Linux / Remote VM / SSH (Headless - No Local Browser)]"
+    echo "   Run the following commands to authenticate your environment:"
+    echo "     $ gcloud auth login --enable-gdrive-access --no-launch-browser"
+    echo "     $ gcloud auth application-default login --no-launch-browser"
+    echo "     $ gcloud auth application-default set-quota-project ${target_proj}"
+    echo "     $ gcloud config set project ${target_proj}"
+    echo "   Note: Open the verification URL in any local browser, sign in, and paste the code back."
+    ;;
+  macos)
+    echo "👉 [DETECTED HOST ENVIRONMENT: macOS (Local Terminal / iTerm)]"
+    echo "   Run the following commands to authenticate your environment:"
+    echo "     $ gcloud auth login --enable-gdrive-access"
+    echo "     $ gcloud auth application-default login"
+    echo "     $ gcloud auth application-default set-quota-project ${target_proj}"
+    echo "     $ gcloud config set project ${target_proj}"
+    echo "   Note: A browser window will open automatically for authentication."
+    ;;
+  windows_wsl)
+    echo "👉 [DETECTED HOST ENVIRONMENT: Windows (WSL / WSL2 / PowerShell)]"
+    echo "   Run the following commands to authenticate your environment:"
+    echo "     $ gcloud auth login --enable-gdrive-access"
+    echo "     $ gcloud auth application-default login"
+    echo "     $ gcloud auth application-default set-quota-project ${target_proj}"
+    echo "     $ gcloud config set project ${target_proj}"
+    echo "   Note: If running in WSL without browser interop, append '--no-launch-browser'."
+    ;;
+  *)
+    echo "👉 [DETECTED HOST ENVIRONMENT: Linux Desktop (with GUI Display)]"
+    echo "   Run the following commands to authenticate your environment:"
+    echo "     $ gcloud auth login --enable-gdrive-access"
+    echo "     $ gcloud auth application-default login"
+    echo "     $ gcloud auth application-default set-quota-project ${target_proj}"
+    echo "     $ gcloud config set project ${target_proj}"
+    echo "   Note: A browser window will open automatically."
+    ;;
+  esac
+  echo ""
+  echo "📋 [Other Environments Reference]:"
+  echo "   • Headless Linux / Remote VM: gcloud auth login --enable-gdrive-access --no-launch-browser"
+  echo "   • macOS / Linux GUI:      gcloud auth login --enable-gdrive-access"
+  echo "   • Windows (WSL):          gcloud auth login --enable-gdrive-access"
+  echo "================================================================================"
+  echo ""
+}
+
+verify_auth_preflight() {
+  local target_proj="$1"
+  local tok=""
+  tok=$(gcloud auth print-access-token 2>/dev/null || echo "")
+  if [ -z "$tok" ] || echo "$tok" | grep -qi -E 'error|problem refreshing'; then
+    tok=$(gcloud auth application-default print-access-token 2>/dev/null || echo "")
+  fi
+  if [ -z "$tok" ] || echo "$tok" | grep -qi -E 'error|problem refreshing'; then
+    echo "❌ Error: Google Cloud credentials have expired or are missing."
+    print_auth_guidance_sh "$target_proj"
+    if [ -t 0 ]; then
+      echo "⏸️  Interactive pause: please authenticate in another terminal or browser tab."
+      read -r -p "   Press [Enter] once authenticated to retry, or Ctrl+C to abort... " _PAUSE_IN
+      tok=$(gcloud auth print-access-token 2>/dev/null || echo "")
+      if [ -z "$tok" ] || echo "$tok" | grep -qi -E 'error|problem refreshing'; then
+        tok=$(gcloud auth application-default print-access-token 2>/dev/null || echo "")
+      fi
+      if [ -n "$tok" ] && ! echo "$tok" | grep -qi -E 'error|problem refreshing'; then
+        echo "✅ Authentication successfully verified!"
+      else
+        echo "❌ Authentication re-check failed. Aborting deployment."
+        exit 1
+      fi
+    else
+      echo "❌ Non-interactive environment: cannot pause for login. Aborting deployment."
+      exit 1
+    fi
+  fi
+
+  # Google Drive OAuth scope preflight verification (R4)
+  if [ "${SKIP_DRIVE_UPLOAD:-}" != "1" ] && [ "${SKIP_DRIVE_UPLOAD:-}" != "true" ]; then
+    local drive_http
+    drive_http=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $tok" -H "X-Goog-User-Project: $target_proj" "https://www.googleapis.com/drive/v3/about?fields=user" 2>/dev/null || echo "000")
+    if [ "$drive_http" = "403" ]; then
+      echo "⚠️  Active Google Cloud credentials lack Google Drive OAuth scope (HTTP 403)."
+      echo "   Demo assets (PDF, Excel, scanned handwritten images) require Drive access"
+      echo "   to be uploaded to Google Drive. Without it, files remain in ./external_files/ and GCS."
+      echo ""
+      local os_type
+      os_type="$(detect_host_os)"
+      if [ "$os_type" = "linux_headless" ]; then
+        echo "👉 Recommended command for headless/remote environment:"
+        echo "     $ gcloud auth login --enable-gdrive-access --no-launch-browser"
+      else
+        echo "👉 Recommended command:"
+        echo "     $ gcloud auth login --enable-gdrive-access"
+      fi
+      echo ""
+      if [ -t 0 ]; then
+        local _DRIVE_REPLY=""
+        read -r -p "   Authenticate now with Drive scope? (y/n, default: y): " _DRIVE_REPLY
+        if [ -z "$_DRIVE_REPLY" ] || [[ "$_DRIVE_REPLY" =~ ^[Yy] ]]; then
+          if [ "$os_type" = "linux_headless" ]; then
+            gcloud auth login --enable-gdrive-access --no-launch-browser
+          else
+            gcloud auth login --enable-gdrive-access
+          fi
+          tok=$(gcloud auth print-access-token 2>/dev/null || echo "")
+          drive_http=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $tok" -H "X-Goog-User-Project: $target_proj" "https://www.googleapis.com/drive/v3/about?fields=user" 2>/dev/null || echo "000")
+          if [ "$drive_http" = "200" ]; then
+            echo "   ✅ Google Drive OAuth scope verified!"
+          else
+            echo "   ⚠️  Drive scope still unavailable (HTTP $drive_http). Continuing with SKIP_DRIVE_UPLOAD=1."
+            export SKIP_DRIVE_UPLOAD=1
+          fi
+        else
+          echo "   ℹ️ Continuing deployment without Google Drive upload (local + GCS staging only)."
+          export SKIP_DRIVE_UPLOAD=1
+        fi
+      else
+        echo "   ℹ️ Non-interactive session: continuing with SKIP_DRIVE_UPLOAD=1."
+        export SKIP_DRIVE_UPLOAD=1
+      fi
+    elif [ "$drive_http" = "200" ]; then
+      echo "✅ Google Cloud & Google Drive authentication scopes verified."
+    fi
+  fi
+  return 0
+}
+
+run_environment_doctor() {
+  local os_type
+  os_type="$(detect_host_os)"
+  echo "🩺 [Host Environment Doctor] Auditing execution environment ($os_type)..."
+
+  # 1. uv package manager
+  if ! command -v uv >/dev/null 2>&1; then
+    if [ -f "$HOME/.local/bin/uv" ]; then
+      export PATH="$HOME/.local/bin:$PATH"
+    elif [ -f "$HOME/.cargo/bin/uv" ]; then
+      export PATH="$HOME/.cargo/bin:$PATH"
+    fi
+  fi
+  if command -v uv >/dev/null 2>&1; then
+    echo "  ✅ uv package manager : $(uv --version 2>/dev/null | head -n 1)"
+  else
+    echo "  ⚠️  uv is not installed. Attempting auto-bootstrap..."
+    if command -v curl >/dev/null 2>&1; then
+      curl -LsSf https://astral.sh/uv/install.sh | sh >/dev/null 2>&1 || true
+      if [ -f "$HOME/.local/bin/uv" ]; then
+        export PATH="$HOME/.local/bin:$PATH"
+        echo "  ✅ uv auto-bootstrapped: $(uv --version 2>/dev/null | head -n 1)"
+      else
+        echo "  ℹ️ uv could not be installed automatically; python3/pip will be used as fallback."
+      fi
+    else
+      echo "  ℹ️ curl unavailable; continuing with standard python3."
+    fi
+  fi
+
+  # 2. Multilingual fonts for operational document & video rendering
+  if [ -f "scripts/ensure_fonts.py" ]; then
+    python3 scripts/ensure_fonts.py --check-only >/dev/null 2>&1 || true
+  fi
+
+  # 3. Virtual display Xvfb (for headless browser automation & video recording)
+  if [ "$os_type" = "linux_headless" ]; then
+    if command -v xvfb-run >/dev/null 2>&1; then
+      echo "  ✅ Xvfb virtual display: Available (xvfb-run)"
+    else
+      echo "  ℹ️ Xvfb (xvfb-run) not found. (Required only if running headless demo video recording)"
+    fi
+  fi
+
+  # 4. FFmpeg (for video rendering & audio mixing)
+  if command -v ffmpeg >/dev/null 2>&1; then
+    echo "  ✅ FFmpeg multimedia  : Available ($(ffmpeg -version 2>/dev/null | head -n 1 | cut -d' ' -f3))"
+  else
+    echo "  ℹ️ FFmpeg not found. (Required only if generating executive demo videos)"
+  fi
+}
+
+if [ -z "$PROJECT_ID" ]; then
+  echo "❌ Error: No default project found in your environment."
+  echo "Please set PROJECT_ID in .env or run 'gcloud config set project [PROJECT_ID]' first."
+  exit 1
+fi
+
+verify_auth_preflight "$PROJECT_ID"
+run_environment_doctor
+
 # PROJECT_ID comes from `.env` here, so it is free to disagree with whatever
 # `gcloud config` happens to point at - and it did: a deploy that announced
 # "Target Project: <the .env one>" built the agent into the *config* project,
@@ -89,7 +305,14 @@ PROJECT_ID=${PROJECT_ID:-$(gcloud config get-value project 2>/dev/null)}
 # resolves to the project the banner names. The explicit --project on the deploys
 # stays as well, so the divergence cannot come back one flag at a time.
 export CLOUDSDK_CORE_PROJECT="$PROJECT_ID"
+gcloud auth application-default set-quota-project "$PROJECT_ID" >/dev/null 2>&1 || true
 PROJECT_NUMBER=$(gcloud projects describe "$PROJECT_ID" --format="value(projectNumber)" 2>/dev/null || echo "")
+if [ -z "$PROJECT_NUMBER" ]; then
+  echo "❌ Error: Could not retrieve project details for '$PROJECT_ID'."
+  echo "   Verify that you have permissions on this project or check if the project ID is correct."
+  print_auth_guidance_sh "$PROJECT_ID"
+  exit 1
+fi
 REGION=${REGION:-${CLOUD_RUN_REGION:-"asia-northeast1"}}
 DATASET_ID=${BIGQUERY_DATASET:-"demo_dataset"}
 # Extra datasets the agent's scope gate may read beyond its own, for a demo
@@ -243,12 +466,8 @@ echo "==========================================================================
 echo "🔎 Checking Gemini Enterprise prerequisites..."
 gcloud services enable discoveryengine.googleapis.com --project "$PROJECT_ID" >/dev/null 2>&1 || true
 _GE_PF_TOKEN=$(gcloud auth print-access-token 2>/dev/null || echo "")
+[ -z "$_GE_PF_TOKEN" ] && _GE_PF_TOKEN=$(gcloud auth application-default print-access-token 2>/dev/null || echo "")
 _GE_PF_FOUND=""
-# "No app" and "could not tell" are different answers and only one of them may
-# stop the run. A listing that comes back as an API error - Discovery Engine not
-# enabled yet, or an account without permission to list engines - is not
-# evidence that the project has no app, and aborting on it would refuse to
-# deploy into a project that is already set up correctly.
 _GE_PF_READABLE=""
 if [ -n "$_GE_PF_TOKEN" ]; then
   for _PF_LOC in "global" "us" "eu"; do
@@ -271,10 +490,30 @@ fi
 
 if [ -n "$_GE_PF_FOUND" ]; then
   echo "   ✅ Gemini Enterprise app found in '${_GE_PF_FOUND}'. The agent will be registered into it."
-elif [ -z "$_GE_PF_TOKEN" ] || [ -z "$_GE_PF_READABLE" ]; then
-  echo "   ⚠️  Could not check for a Gemini Enterprise app (no access token, or the"
-  echo "      engines listing returned an error). This is not proof that none exists,"
-  echo "      so the deploy continues; registration is retried after it."
+elif [ -z "$_GE_PF_READABLE" ]; then
+  echo "   ⚠️  Could not query Gemini Enterprise engines. Attempting auto-repair..."
+  gcloud auth application-default set-quota-project "$PROJECT_ID" >/dev/null 2>&1 || true
+  _GE_PF_TOKEN=$(gcloud auth print-access-token 2>/dev/null || echo "")
+  [ -z "$_GE_PF_TOKEN" ] && _GE_PF_TOKEN=$(gcloud auth application-default print-access-token 2>/dev/null || echo "")
+  for _PF_LOC in "global" "us" "eu"; do
+    _PF_EP="discoveryengine.googleapis.com"
+    [ "$_PF_LOC" != "global" ] && _PF_EP="${_PF_LOC}-discoveryengine.googleapis.com"
+    _PF_JSON=$(curl -s -H "Authorization: Bearer $_GE_PF_TOKEN" -H "X-Goog-User-Project: $PROJECT_ID" \
+      "https://${_PF_EP}/v1alpha/projects/$PROJECT_ID/locations/${_PF_LOC}/collections/default_collection/engines" 2>/dev/null || echo "")
+    if ! echo "$_PF_JSON" | grep -q '"error"'; then
+      _GE_PF_READABLE="yes"
+      if echo "$_PF_JSON" | grep -q '"name": "projects/[^"]*/engines/'; then
+        _GE_PF_FOUND="$_PF_LOC"
+        break
+      fi
+    fi
+  done
+  if [ -n "$_GE_PF_FOUND" ]; then
+    echo "   ✅ Auto-healed: Gemini Enterprise app found in '${_GE_PF_FOUND}'."
+  elif [ -z "$_GE_PF_READABLE" ]; then
+    echo "   ⚠️  Engines listing returned an error even after setting quota project."
+    echo "      Continuing deploy; Stage 3.5 autonomous verification will enforce registration."
+  fi
 else
   _GE_PF_LICENSE=$(curl -s -H "Authorization: Bearer $_GE_PF_TOKEN" -H "X-Goog-User-Project: $PROJECT_ID" \
     "https://discoveryengine.googleapis.com/v1alpha/projects/$PROJECT_ID/locations/global/licenseConfigs" |
@@ -1185,9 +1424,15 @@ except Exception:
     echo "   - the Terms for data use (https://cloud.google.com/retail/data-use-terms)"
     echo "   - the Gemini Enterprise (Agentspace) quality-of-service terms"
     _GE_TRIAL_REPLY="${GE_FREE_TRIAL_CONSENT:-}"
-    if [ -z "$_GE_TRIAL_REPLY" ] && [ -t 0 ]; then
-      read -p "   Start a free trial subscription automatically? (y/n) " -n 1 -r _GE_TRIAL_REPLY
-      echo
+    if [ -z "$_GE_TRIAL_REPLY" ]; then
+      if [ -t 0 ]; then
+        read -p "   Start a free trial subscription automatically? (y/n, default: y) " -n 1 -r _GE_TRIAL_REPLY
+        echo
+        _GE_TRIAL_REPLY=${_GE_TRIAL_REPLY:-y}
+      else
+        echo "   (Non-interactive environment: auto-accepting trial license terms as GE_FREE_TRIAL_CONSENT=y)"
+        _GE_TRIAL_REPLY="y"
+      fi
     fi
     if [[ "$_GE_TRIAL_REPLY" =~ ^[Yy] ]]; then
       TRIAL_OUT=$(
@@ -1531,6 +1776,15 @@ ACTUAL_DESCRIPTION="${DEMO_DESCRIPTION:-$_DEFAULT_DESC}"
     # deploy: the summary just lost its direct chat link and said nothing about
     # why. Keep the script alive, but print what the API answered.
     register_agent_once() {
+      TOKEN=$(gcloud auth print-access-token 2>/dev/null || echo "$TOKEN")
+      [ -z "$TOKEN" ] && TOKEN=$(gcloud auth application-default print-access-token 2>/dev/null || echo "")
+      if [ -n "$PROJECT_NUMBER" ]; then
+        DE_SA="service-${PROJECT_NUMBER}@gcp-sa-discoveryengine.iam.gserviceaccount.com"
+        gcloud run services add-iam-policy-binding "$SERVICE_NAME" \
+          --project="$PROJECT_ID" --region="$REGION" \
+          --member="serviceAccount:${DE_SA}" \
+          --role="roles/run.invoker" >/dev/null 2>&1 || true
+      fi
       python3 scripts/register_agent.py \
         "$SELECTED_LOC" \
         "$PROJECT_ID" \
@@ -1697,9 +1951,14 @@ fi
 if [ -f scripts/verify_and_heal.py ]; then
   echo ""
   echo "🛡️  [4/4] Running Autonomous Verification & Real-Time Self-Healing Engine..."
-  python3 scripts/verify_and_heal.py || {
-    echo "⚠️ Autonomous verification noted warnings/issues. Review logs above."
-  }
+  if ! python3 scripts/verify_and_heal.py; then
+    echo ""
+    echo "❌ CRITICAL: Autonomous verification and self-healing encountered issues."
+    print_auth_guidance_sh "$PROJECT_ID"
+    echo "💡 After resolving any authentication or configuration issues, re-run verification:"
+    echo "     $ python3 scripts/verify_and_heal.py"
+    exit 1
+  fi
 fi
 
 GE_DIRECT_CHAT_URL=$(cat .ge_direct_url 2>/dev/null || echo "")
@@ -1872,6 +2131,15 @@ if [ ! -z "$GCS_CONSOLE_URL" ]; then
   echo "   👉 ${GCS_CONSOLE_URL}"
   echo ""
 fi
+if [ -z "$AGENT_ID" ]; then
+  echo ""
+  echo "❌ CRITICAL: Agent registration to Gemini Enterprise did not complete."
+  print_auth_guidance_sh "$PROJECT_ID"
+  echo "💡 After resolving authentication or configuration issues, re-run verification:"
+  echo "     $ python3 scripts/verify_and_heal.py"
+  exit 1
+fi
+
 echo "================================================================================"
 echo "💡 Next Steps:"
 echo "• Open the Gemini Enterprise Chat URL above and try the 7 Demo Prompts!"

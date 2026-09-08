@@ -183,20 +183,22 @@ def generate_document_image(output_path: str, title: str, company_name: str, doc
 
         if not is_discrepancy:
             prompt = f"""A highly detailed, realistic top-down flat-lay scan of an authentic paper {st['routine_doc_kind']} ({company_name}) on a textured, slightly wrinkled sheet of paper filling the entire frame with zero background.
+The entire document is isolated, with no background, no desk, no office environment, no hands, no pens, and no keyboards. Just the single sheet of paper document filling the entire frame from a direct top-down 90-degree angle.
 At the top: bold printed formal header "{title}", Date: "{date_str}", Ref No: "{doc_no}", Company: "{company_name}".
 In the center: a printed table grid with column headers: {cols_text}.
-Inside the table cells, hurried and realistic human handwriting in dark blue ballpoint pen ink, written in {st['handwriting_language']}:
+Inside the table cells, the handwriting features highly realistic, chaotic, and significantly distorted human handwriting written with a cheap ballpoint pen in dark blue ink, written in {st['handwriting_language']}, with authentic human imperfections like ink clumps, minor pen skips, pen pressure variations, and natural ink smudges:
 {rows_text}
 At the bottom right: a designated verification box carrying a red ink corporate approval stamp reading "{st['approval_seal']}".
-Authentic paper grain, slight pen pressure indentations, real-world operational document photograph, sharp focus, top-down perspective."""
+Authentic paper grain, slight pen pressure indentations, real-world operational document photograph, sharp focus, natural flat daylight."""
         else:
             prompt = f"""A highly detailed, realistic top-down flat-lay scan of an authentic paper {st['exception_doc_kind']} ({company_name}) on textured paper filling the frame.
+The entire document is isolated, with no background, no desk, no office environment, no hands, no pens, and no keyboards. Just the single sheet of paper document filling the entire frame from a direct top-down 90-degree angle.
 At the top: bold printed formal header "{title}", Ref No: "{doc_no}", Location: "{location}".
 In the center: a printed table grid with columns: {cols_text}.
-Inside the table cells, messy hurried human handwriting in blue and black ballpoint pen ink, written in {st['handwriting_language']}:
+Inside the table cells, messy hurried human handwriting in blue and black ballpoint pen ink, written in {st['handwriting_language']}, with unsteady strokes and authentic ink smudges:
 {rows_text}
 In the margin: a highlighted red pen handwritten urgent inspection note "{st['urgent_note']}".
-Red ink stamp "{st['review_stamp']}" stamped on the sheet. Realistic lighting, paper texture, authentic operational document photograph."""
+Red ink stamp "{st['review_stamp']}" stamped on the sheet. Authentic paper grain, folds and natural flat daylight."""
 
         for model_name in ["gemini-3.1-flash-image", "gemini-3-pro-image"]:
             try:
@@ -672,6 +674,7 @@ def main():
     parser.add_argument("--company", default="Demo Company", help="Company Name")
     parser.add_argument("--suffix", default="1234", help="Unique demo suffix")
     parser.add_argument("--outdir", default="./external_files", help="Output directory for generated files")
+    parser.add_argument("--upload-only", action="store_true", help="Skip file generation if files already exist in outdir, and upload directly to Google Drive")
     parser.add_argument(
         "--spec-file", default="",
         help="JSON file describing this demo's external files. Shape: "
@@ -689,6 +692,16 @@ def main():
     xlsx_path = str(out_dir / f"{args.domain.replace('.', '_')}_external_ledger.xlsx")
     img1_path = str(out_dir / f"{args.domain.replace('.', '_')}_simulated_order_task1.jpg")
     img2_path = str(out_dir / f"{args.domain.replace('.', '_')}_simulated_order_task2_discrepancy.jpg")
+
+    existing_files = [pdf_path, xlsx_path, img1_path, img2_path]
+    if args.upload_only and all(os.path.exists(p) for p in existing_files):
+        print(f"ℹ️ --upload-only: Reusing {len(existing_files)} existing demo files from {out_dir}")
+        upload_res = upload_to_google_drive(args.company, args.suffix, existing_files)
+        summary_path = out_dir / "drive_upload_summary.json"
+        with open(summary_path, "w", encoding="utf-8") as f:
+            json.dump(upload_res, f, indent=2, ensure_ascii=False)
+        print(f"\n💾 Upload summary saved to: {summary_path}")
+        return 0
 
     # The demo's own content comes from --spec-file, written in Phase 3 by the
     # skill. GE Demo Generator targets ANY domain, so the built-in fallback

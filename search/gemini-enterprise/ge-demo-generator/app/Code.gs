@@ -101,7 +101,7 @@ const CONFIG = {
   GITHUB_TOKEN: SCRIPT_PROPS.getProperty('GITHUB_TOKEN'),
   MAX_RETRIES: 3,
   RETRY_DELAY_MS: 1000,
-  APP_VERSION: 'v12.11-public',
+  APP_VERSION: 'v12.19-public',
   // Agent-template source: the generated setup script fetches the static
   // Python/JSON template files (agent_template/ in the repo) at run time.
   // TEMPLATE_REF may be a branch name (default 'main'): it is resolved to a
@@ -548,7 +548,17 @@ function generateDemo(userGoal, options = {}) {
     // toggle exists because the trade-off lands on exactly one message - the
     // first one after an idle gap - and that is often the one an audience
     // watches. MIN_INSTANCES in the environment still overrides either way.
-    keepWarm: false
+    keepWarm: false,
+    enableCloudTelemetry: true,
+    enableModelArmor: false,
+    modelArmorTemplate: '',
+    // Data exploration. 'mcp' is the default: the data-asset catalog is already
+    // in the system instruction, so a figure question is ONE execute_sql call
+    // with no metadata expedition first, and no index has to be built, imported
+    // or scoped for the demo to work. 'rag' adds the Discovery Engine index and
+    // makes it the read path - worth it when the demo turns on documents rather
+    // than figures. v11.65-v11.72 defaulted to the hybrid variant of 'rag'.
+    dataExplorationMode: 'mcp'
   };
   options = { ...defaultOptions, ...options };
   
@@ -639,6 +649,10 @@ function generateDemo(userGoal, options = {}) {
     result.enableManagedAgent = options.enableManagedAgent || false;
     result.enableWorkspaceAuth = options.enableWorkspaceAuth || false;
     result.keepWarm = options.keepWarm || false;
+    result.enableCloudTelemetry = options.enableCloudTelemetry !== false;
+    result.enableModelArmor = options.enableModelArmor || false;
+    result.modelArmorTemplate = options.modelArmorTemplate || '';
+    result.dataExplorationMode = (options.dataExplorationMode === 'rag') ? 'rag' : 'mcp';
 
     result.setupScript = generateSetupScript({
       datasetId: datasetId,
@@ -660,6 +674,10 @@ function generateDemo(userGoal, options = {}) {
       enableManagedAgent: options.enableManagedAgent,
       enableWorkspaceAuth: options.enableWorkspaceAuth,
       keepWarm: options.keepWarm,
+      enableCloudTelemetry: result.enableCloudTelemetry,
+      enableModelArmor: result.enableModelArmor,
+      modelArmorTemplate: result.modelArmorTemplate,
+      dataExplorationMode: result.dataExplorationMode,
       metadata: planResult.metadata
     });
     result.steps.push({ step: 4, status: 'completed', message: 'Generation complete' });
@@ -2450,7 +2468,17 @@ function buildDataAssetCatalog_(tables) {
 }
 
 function generateSetupScript(params) {
-  const { datasetId, systemInstruction, businessInstruction, referenceDate, publicDatasetId, suffix, tables, firestore, userGoal, dirName, agentShortName, oneSentenceSummary, operatingModel, enableWorkspaceMcp, enableComputerUse, enableManagedAgent, enableWorkspaceAuth, keepWarm, metadata } = params;
+  const { datasetId, systemInstruction, businessInstruction, referenceDate, publicDatasetId, suffix, tables, firestore, userGoal, dirName, agentShortName, oneSentenceSummary, operatingModel, enableWorkspaceMcp, enableComputerUse, enableManagedAgent, enableWorkspaceAuth, keepWarm, enableCloudTelemetry, enableModelArmor, modelArmorTemplate, metadata } = params;
+  // Data exploration mode. 'mcp' (default) keeps the agent on the Knowledge
+  // Catalog + SQL path and provisions no search index; 'rag' builds a Discovery
+  // Engine index and makes it the READ path, leaving writes and computed
+  // figures on MCP. `enableDatastoreConnectors` is the pre-v11.73 boolean and is
+  // still honoured so a demo restored from Drive rebuilds the same script.
+  const dataExplorationMode =
+    (params.dataExplorationMode === 'rag' || params.dataExplorationMode === 'mcp')
+      ? params.dataExplorationMode
+      : (params.enableDatastoreConnectors === true ? 'rag' : 'mcp');
+  const ragMode = (dataExplorationMode === 'rag');
 
   // Derived feature gates (see AGENTS.md section 14):
   // - workspaceAuthEnabled: the GE OAuth authorization (user token) exists.
@@ -3836,14 +3864,114 @@ fi
 
 # --- Authentication & Permissions Check ---
 echo "🔐 Checking authentication..."
-if ! gcloud auth application-default print-access-token >/dev/null 2>&1 || ! gcloud auth print-access-token >/dev/null 2>&1; then
+detect_host_os() {
+  local uname_s
+  uname_s="$(uname -s 2>/dev/null || echo '')"
+  case "\$uname_s" in
+    Darwin*) echo "macos" ;;
+    Linux*)
+      if grep -qi -E 'microsoft|wsl' /proc/version 2>/dev/null; then
+        echo "windows_wsl"
+      elif [ -z "\${DISPLAY:-}" ] || [ -n "\${SSH_CLIENT:-}" ] || [ -n "\${SSH_TTY:-}" ] || [ -n "\${CLOUD_SHELL:-}" ]; then
+        echo "linux_headless"
+      else
+        echo "linux_gui"
+      fi
+      ;;
+    CYGWIN*|MINGW*|MSYS*) echo "windows" ;;
+    *) echo "linux_headless" ;;
+  esac
+}
+
+print_auth_guidance_sh() {
+  local target_proj="\$1"
+  local os_type
+  os_type="$(detect_host_os)"
+  echo ""
+  echo "================================================================================"
+  echo "💡 ACTION REQUIRED: Google Cloud Authentication & Setup Guide"
+  echo "================================================================================"
+  case "\$os_type" in
+    linux_headless)
+      echo "👉 [DETECTED HOST ENVIRONMENT: Linux / Remote VM / SSH (Headless - No Local Browser)]"
+      echo "   Run the following commands to authenticate your environment:"
+      echo "     $ gcloud auth login --enable-gdrive-access --no-launch-browser"
+      echo "     $ gcloud auth application-default login --no-launch-browser"
+      echo "     $ gcloud auth application-default set-quota-project \${target_proj}"
+      echo "     $ gcloud config set project \${target_proj}"
+      echo "   Note: Open the verification URL in any local browser, sign in, and paste the code back."
+      ;;
+    macos)
+      echo "👉 [DETECTED HOST ENVIRONMENT: macOS (Local Terminal / iTerm)]"
+      echo "   Run the following commands to authenticate your environment:"
+      echo "     $ gcloud auth login --enable-gdrive-access"
+      echo "     $ gcloud auth application-default login"
+      echo "     $ gcloud auth application-default set-quota-project \${target_proj}"
+      echo "     $ gcloud config set project \${target_proj}"
+      echo "   Note: A browser window will open automatically for authentication."
+      ;;
+    windows_wsl)
+      echo "👉 [DETECTED HOST ENVIRONMENT: Windows (WSL / WSL2 / PowerShell)]"
+      echo "   Run the following commands to authenticate your environment:"
+      echo "     $ gcloud auth login --enable-gdrive-access"
+      echo "     $ gcloud auth application-default login"
+      echo "     $ gcloud auth application-default set-quota-project \${target_proj}"
+      echo "     $ gcloud config set project \${target_proj}"
+      echo "   Note: If running in WSL without browser interop, append '--no-launch-browser'."
+      ;;
+    *)
+      echo "👉 [DETECTED HOST ENVIRONMENT: Linux Desktop (with GUI Display)]"
+      echo "   Run the following commands to authenticate your environment:"
+      echo "     $ gcloud auth login --enable-gdrive-access"
+      echo "     $ gcloud auth application-default login"
+      echo "     $ gcloud auth application-default set-quota-project \${target_proj}"
+      echo "     $ gcloud config set project \${target_proj}"
+      echo "   Note: A browser window will open automatically."
+      ;;
+  esac
+  echo ""
+  echo "📋 [Other Environments Reference]:"
+  echo "   • Headless Linux / Remote VM: gcloud auth login --enable-gdrive-access --no-launch-browser"
+  echo "   • macOS / Linux GUI:      gcloud auth login --enable-gdrive-access"
+  echo "   • Windows (WSL):          gcloud auth login --enable-gdrive-access"
+  echo "================================================================================"
+  echo ""
+}
+
+verify_auth_preflight() {
+  local target_proj="\$1"
+  local tok=""
+  tok=$(gcloud auth print-access-token 2>/dev/null || echo "")
+  if [ -z "\$tok" ] || echo "\$tok" | grep -qi -E 'error|problem refreshing'; then
+    tok=$(gcloud auth application-default print-access-token 2>/dev/null || echo "")
+  fi
+  if [ -n "\$tok" ] && ! echo "\$tok" | grep -qi -E 'error|problem refreshing'; then
+    return 0
+  fi
+
   echo "❌ Error: Google Cloud credentials have expired or are missing."
-  echo "💡 Please run the following commands to re-authenticate:"
-  echo "    gcloud auth login"
-  echo "    gcloud auth application-default login"
-  echo "Then re-run this setup script."
-  exit 1
-fi
+  print_auth_guidance_sh "\$target_proj"
+  if [ -t 0 ]; then
+    echo "⏸️  Interactive pause: please authenticate in another terminal or browser tab."
+    read -r -p "   Press [Enter] once authenticated to retry, or Ctrl+C to abort... " _PAUSE_IN
+    tok=$(gcloud auth print-access-token 2>/dev/null || echo "")
+    if [ -z "\$tok" ] || echo "\$tok" | grep -qi -E 'error|problem refreshing'; then
+      tok=$(gcloud auth application-default print-access-token 2>/dev/null || echo "")
+    fi
+    if [ -n "\$tok" ] && ! echo "\$tok" | grep -qi -E 'error|problem refreshing'; then
+      echo "✅ Authentication successfully verified!"
+      return 0
+    fi
+    echo "❌ Authentication re-check failed. Aborting deployment."
+    exit 1
+  else
+    echo "❌ Non-interactive environment: cannot pause for login. Aborting deployment."
+    exit 1
+  fi
+}
+
+verify_auth_preflight "$PROJECT_ID"
+gcloud auth application-default set-quota-project "$PROJECT_ID" >/dev/null 2>&1 || true
 
 PROJECT_NUMBER=$(gcloud projects describe "$PROJECT_ID" --format="value(projectNumber)" 2>/dev/null || echo "")
 if [ -z "$PROJECT_NUMBER" ]; then
@@ -4236,7 +4364,7 @@ while true; do
   echo "📂 Demo Asset Directory: ~/${dirName}"
   echo "🧠 Agent Models:   root_agent: \$AGENT_MODEL_LITE / deep_analysis_agent: \$AGENT_MODEL"
   echo "🧪 Code Sandbox:   ✅ Enabled (Agent Runtime)"
-  ${ enableComputerUse ? `echo "🖥️ Computer Use:   ✅ Enabled (Browser Agent)"\n` : ''}${ enableManagedAgent ? `echo "🤖 Managed Agent:  ✅ Enabled (Antigravity autonomous sandbox - provisioned in parallel with setup)"\n` : ''}${ enableWorkspaceMcp ? `echo "🔌 Google Workspace MCP: Enabled"\n` : ''}${ (enableWorkspaceAuth && !enableWorkspaceMcp) ? `echo "🔐 Workspace Auth: ✅ Enabled (user OAuth, no MCP servers)"\n` : ''}${ keepWarm ? 'echo "🔥 Warm Instance:  ✅ Enabled (min-instances 1 - no cold start, billed while idle)"\n' : ''}${mcpBanner}echo "========================================================="
+  ${ ragMode ? `echo "🔎 Data Exploration: RAG-preferred (Discovery Engine index reads + SQL for computed figures and writes)"\n` : `echo "🔎 Data Exploration: MCP (Knowledge Catalog + SQL) - default"\n` }${ enableComputerUse ? `echo "🖥️ Computer Use:   ✅ Enabled (Browser Agent)"\n` : ''}${ enableManagedAgent ? `echo "🤖 Managed Agent:  ✅ Enabled (Antigravity autonomous sandbox - provisioned in parallel with setup)"\n` : ''}${ enableWorkspaceMcp ? `echo "🔌 Google Workspace MCP: Enabled"\n` : ''}${ (enableWorkspaceAuth && !enableWorkspaceMcp) ? `echo "🔐 Workspace Auth: ✅ Enabled (user OAuth, no MCP servers)"\n` : ''}${ keepWarm ? 'echo "🔥 Warm Instance:  ✅ Enabled (min-instances 1 - no cold start, billed while idle)"\n' : ''}${ enableCloudTelemetry !== false ? 'echo "📡 Telemetry (Trace): ✅ Enabled (Cloud Trace token tracking & latency waterfall)"\n' : 'echo "📡 Telemetry (Trace): ❌ Disabled"\n' }${ enableModelArmor ? 'echo "🛡️ Model Armor:     ✅ Enabled (Prompt injection & sensitive data protection)"\n' : ''}${mcpBanner}echo "========================================================="
   
   # --yes is advertised as "skip confirmation prompts (non-interactive use)", so
   # it has to skip this one too. Without the break, "read" gets EOF, returns
@@ -4619,6 +4747,19 @@ gcloud services enable \
   cloudbuild.googleapis.com \
   artifactregistry.googleapis.com \
   --project="$PROJECT_ID"
+${ enableCloudTelemetry !== false ? 'gcloud services enable cloudtrace.googleapis.com --project="$PROJECT_ID" 2>/dev/null || true\n' : ''}${ enableModelArmor ? `gcloud services enable modelarmor.googleapis.com --project="$PROJECT_ID" 2>/dev/null || true
+if ! gcloud model-armor templates describe "${modelArmorTemplate ? modelArmorTemplate.split('/').pop() : 'ge-demo-default-armor'}" --location="us-central1" --project="$PROJECT_ID" >/dev/null 2>&1; then
+  echo "🛡️ Provisioning standard generic Model Armor template (${modelArmorTemplate ? modelArmorTemplate.split('/').pop() : 'ge-demo-default-armor'})..."
+  gcloud model-armor templates create "${modelArmorTemplate ? modelArmorTemplate.split('/').pop() : 'ge-demo-default-armor'}" \\
+    --location="us-central1" \\
+    --project="$PROJECT_ID" \\
+    --pi-and-jailbreak-filter-settings-enforcement=enabled \\
+    --pi-and-jailbreak-filter-settings-confidence-level=medium-and-above \\
+    --malicious-uri-filter-settings-enforcement=enabled \\
+    --rai-settings-filters=hate-speech,harassment,sexually-explicit,dangerous \\
+    --rai-settings-confidence-level=medium-and-above \\
+    --basic-config-filter-enforcement=enabled 2>/dev/null || true
+fi\n` : ''}
 
 # Fast IAM role granting: pre-checks existing roles, skips already-granted, no verification delay
 grant_roles_fast() {
@@ -4666,7 +4807,7 @@ grant_roles_fast "$PROJECT_ID" "serviceAccount" "\$COMPUTE_SA" \
   "roles/mcp.toolUser" "roles/bigquery.jobUser" "roles/bigquery.dataEditor" \
   "roles/serviceusage.serviceUsageConsumer" "roles/aiplatform.user" "roles/logging.logWriter" \
   "roles/datastore.user" "roles/storage.objectViewer" "roles/storage.objectAdmin" "roles/artifactregistry.admin" "roles/run.invoker" \
-  "roles/pubsub.publisher" "roles/cloudscheduler.admin" "roles/cloudtasks.enqueuer" "roles/dataplex.catalogViewer"
+  "roles/pubsub.publisher" "roles/cloudscheduler.admin" "roles/cloudtasks.enqueuer" "roles/dataplex.catalogViewer"${ enableCloudTelemetry !== false ? ' "roles/cloudtrace.agent"' : '' }${ enableModelArmor ? ' "roles/modelarmor.user"' : '' }
 
 # Background task infra: Cloud Scheduler SA needs pubsub.publisher
 echo "🔐 Configuring IAM for Cloud Scheduler Service Agent..."
@@ -5513,6 +5654,10 @@ ENABLE_WORKSPACE_MCP=${enableWorkspaceMcp ? '1' : '0'}
 ENABLE_COMPUTER_USE=${enableComputerUse ? '1' : '0'}
 ENABLE_MANAGED_AGENT=${enableManagedAgent ? '1' : '0'}
 ENABLE_WORKSPACE_AUTH=${enableWorkspaceAuth ? '1' : '0'}
+ENABLE_CLOUD_TELEMETRY=${enableCloudTelemetry !== false ? '1' : '0'}
+ENABLE_MODEL_ARMOR=${enableModelArmor ? '1' : '0'}
+MODEL_ARMOR_TEMPLATE="${modelArmorTemplate || (enableModelArmor ? 'projects/' + '$PROJECT_ID' + '/locations/us-central1/templates/ge-demo-default-armor' : '')}"
+OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT="NO_CONTENT"
 MAPS_API_KEY="$API_KEY"
 PYTHONUNBUFFERED=1
 GRPC_ENABLE_FORK_SUPPORT=1
@@ -5782,6 +5927,15 @@ ${ (params.importedMcpList || []).some(m => m.type === 'remote' && (m.auth_type 
       `ENABLE_WORKSPACE_AUTH=${enableWorkspaceAuth ? '1' : '0'}`,
       "DASHBOARDS_BUCKET=\$DASH_BUCKET",
       "RUNTIME_SA_EMAIL=\$COMPUTE_SA",
+      `ENABLE_CLOUD_TELEMETRY=${enableCloudTelemetry !== false ? '1' : '0'}`,
+      `ENABLE_MODEL_ARMOR=${enableModelArmor ? '1' : '0'}`,
+      `MODEL_ARMOR_TEMPLATE=${modelArmorTemplate || (enableModelArmor ? 'projects/' + '\\$PROJECT_ID' + '/locations/us-central1/templates/ge-demo-default-armor' : '')}`,
+      "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=NO_CONTENT",
+      // Read by agent.py to pick its data-exploration routing block. Passed as a
+      // runtime value rather than baked into the generated Python so the agent
+      // source stays identical to the skill template, and so switching a live
+      // demo between modes is a `gcloud run services update` rather than a redeploy.
+      `DATA_EXPLORATION_MODE=${dataExplorationMode}`,
       // Background worker dispatch. Unset (or a queue that cannot be reached)
       // makes the runtime fall back to the in-container localhost self-call.
       "WORKER_QUEUE=\$WORKER_QUEUE",
@@ -5935,6 +6089,7 @@ ${ (params.importedMcpList || []).some(m => m.type === 'remote' && (m.auth_type 
     --region us-central1 \
     --quiet > "\$DEPLOY_LOG" 2>&1 &`;
     } else {
+      const secUpdate = secrets.length > 0 ? ` \\\n    --update-secrets="${secrets.join(",")}"` : '';
       deployCmd += `CR_ENV_VARS="${envVars.join(",")}"\nif [ "\$VIEWER_DEPLOYED" = "true" ]; then\n  CR_ENV_VARS="\$CR_ENV_VARS,DATA_VIEWER_URL=\$VIEWER_URL"\nfi\nCR_ENV_VARS="\$CR_ENV_VARS,SANDBOX_RESOURCE_NAME=\$SANDBOX_RESOURCE_NAME"\n${enableManagedAgent ? `CR_ENV_VARS="\$CR_ENV_VARS,MANAGED_AGENT_ID=\$MANAGED_AGENT_ID,MANAGED_AGENT_SKILLS_SOURCE=\$MA_SKILLS_SOURCE"\n` : ''}gcloud run deploy "\$SERVICE_NAME" \
     --source .. \
     --memory "8Gi" \
@@ -5947,11 +6102,7 @@ ${ (params.importedMcpList || []).some(m => m.type === 'remote' && (m.auth_type 
     --no-allow-unauthenticated \
     --ingress internal \
     --labels "created-by=adk" \
-    --set-env-vars="\$CR_ENV_VARS"`;
-      if (secrets.length > 0) {
-        deployCmd += ` \\\n    --update-secrets="${secrets.join(",")}"`;
-      }
-      deployCmd += ` \\\n    --region us-central1 \\\n    --quiet > "\$DEPLOY_LOG" 2>&1 &`;
+    --set-env-vars="\$CR_ENV_VARS"${secUpdate} \\\n    --region us-central1 \\\n    --quiet > "\$DEPLOY_LOG" 2>&1 &`;
     }
 
     return deployCmd;
@@ -6200,7 +6351,16 @@ EOF
   # \$1 = location, \$2 = engine id, \$3 = authorization id ("" = register
   # without one).
   register_ge_agent() {
-    python3 register_agent.py "\$1" "$PROJECT_NUMBER" "\$1" "\$2" "$TOKEN" "${dirName}" "$SERVICE_URL/a2a/app" "\$AGENT_DISPLAY_NAME" '${safeSummary}' "\$3" 2>&1
+    TOKEN=$(gcloud auth print-access-token 2>/dev/null || echo "$TOKEN")
+    [ -z "\$TOKEN" ] && TOKEN=$(gcloud auth application-default print-access-token 2>/dev/null || echo "")
+    if [ -n "$PROJECT_NUMBER" ]; then
+      DE_SA="service-$PROJECT_NUMBER@gcp-sa-discoveryengine.iam.gserviceaccount.com"
+      gcloud run services add-iam-policy-binding "${dirName}" \
+        --project="$PROJECT_ID" --region="$REGION" \
+        --member="serviceAccount:\${DE_SA}" \
+        --role="roles/run.invoker" >/dev/null 2>&1 || true
+    fi
+    python3 register_agent.py "\$1" "$PROJECT_NUMBER" "\$1" "\$2" "\$TOKEN" "${dirName}" "$SERVICE_URL/a2a/app" "\$AGENT_DISPLAY_NAME" '${safeSummary}' "\$3" 2>&1
   }
 
   # An authorization that reads back fine can still be REFUSED by the
@@ -6231,9 +6391,10 @@ EOF
     register_ge_agent_with_fallback "$SELECTED_LOC" "$SELECTED_APP_ID" "$AUTH_ID"
     rm register_agent.py
     if [ -z "\$AGENT_ID" ]; then
-      echo "⚠️  Gemini Enterprise registration failed, but the Cloud Run deployment itself is COMPLETE."
-      echo "    An existing registration of this demo (if any) keeps working against the new deployment."
-      echo "    To (re)register manually: Gemini Enterprise > Agents > Add, URL: $SERVICE_URL/a2a/app"
+      echo "❌ CRITICAL: Gemini Enterprise registration failed."
+      echo "    The demo cannot be registered into Gemini Enterprise without valid authentication."
+      print_auth_guidance_sh "$PROJECT_ID"
+      exit 1
     fi
 
   else
@@ -6270,9 +6431,10 @@ EOF
       register_ge_agent_with_fallback "\$SELECTED_LOC" "\$SELECTED_APP_ID" "\$AUTH_ID"
       rm register_agent.py
       if [ -z "\$AGENT_ID" ]; then
-        echo "⚠️  Gemini Enterprise registration failed, but the Cloud Run deployment itself is COMPLETE."
-        echo "    An existing registration of this demo (if any) keeps working against the new deployment."
-        echo "    To (re)register manually: Gemini Enterprise > Agents > Add, URL: \$SERVICE_URL/a2a/app"
+        echo "❌ CRITICAL: Gemini Enterprise registration failed."
+        echo "    The demo cannot be registered into Gemini Enterprise without valid authentication."
+        print_auth_guidance_sh "$PROJECT_ID"
+        exit 1
       fi
     fi
   fi

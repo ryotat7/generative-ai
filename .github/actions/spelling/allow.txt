@@ -309,6 +309,7 @@ CLOEXEC
 cloudrun
 CLOUDSDK
 cloudtasks
+cloudtrace
 cloudveil
 clsx
 cmap
@@ -661,6 +662,7 @@ FMWK
 Foauth
 Folmer
 fontane
+fontconfig
 fontdict
 foo
 footwell
@@ -819,6 +821,7 @@ GSUITE
 gsutil
 gtk
 guanciale
+gui
 Gundogan
 gunicorn
 gutenberg
@@ -1298,6 +1301,7 @@ MSCHF
 MSGSEND
 msmarco
 msr
+MSYS
 MTL
 MTurk
 multiline
@@ -1464,6 +1468,7 @@ Orus
 osm
 oss
 osx
+otf
 otlp
 OTT
 outdir
@@ -2295,6 +2300,8 @@ writerows
 wscat
 wscore
 wscores
+wsl
+WSL
 wsmcp
 wst
 wstoken
