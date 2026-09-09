@@ -27,15 +27,178 @@ import os
 import subprocess
 import sys
 
+try:
+    from google.cloud import texttospeech
+except ImportError:
+    texttospeech = None
+
 # Language code to recommended neural voices (Google Cloud Chirp 3 HD foundation voices)
 VOICE_MAPPING = {
-    "ja-JP": {"voice": "ja-JP-Chirp3-HD-Aoede", "ssml_gender": "FEMALE", "speaking_rate": 1.05},
-    "ja": {"voice": "ja-JP-Chirp3-HD-Aoede", "ssml_gender": "FEMALE", "speaking_rate": 1.05},
-    "en-US": {"voice": "en-US-Chirp3-HD-Achernar", "ssml_gender": "FEMALE", "speaking_rate": 1.0},
-    "en": {"voice": "en-US-Chirp3-HD-Achernar", "ssml_gender": "FEMALE", "speaking_rate": 1.0},
-    "de-DE": {"voice": "de-DE-Chirp3-HD-Achernar", "ssml_gender": "FEMALE", "speaking_rate": 1.0},
-    "fr-FR": {"voice": "fr-FR-Chirp3-HD-Achernar", "ssml_gender": "FEMALE", "speaking_rate": 1.0},
+    "en-US": {"voice": "en-US-Chirp3-HD-Achernar", "language_code": "en-US", "ssml_gender": "FEMALE", "speaking_rate": 1.0},
+    "en": {"voice": "en-US-Chirp3-HD-Achernar", "language_code": "en-US", "ssml_gender": "FEMALE", "speaking_rate": 1.0},
+    "en-GB": {"voice": "en-GB-Chirp3-HD-Achernar", "language_code": "en-GB", "ssml_gender": "FEMALE", "speaking_rate": 1.0},
+    "en-AU": {"voice": "en-AU-Chirp3-HD-Achernar", "language_code": "en-AU", "ssml_gender": "FEMALE", "speaking_rate": 1.0},
+    "en-IN": {"voice": "en-IN-Chirp3-HD-Achernar", "language_code": "en-IN", "ssml_gender": "FEMALE", "speaking_rate": 1.0},
+    "ja-JP": {"voice": "ja-JP-Chirp3-HD-Aoede", "language_code": "ja-JP", "ssml_gender": "FEMALE", "speaking_rate": 1.05},
+    "ja": {"voice": "ja-JP-Chirp3-HD-Aoede", "language_code": "ja-JP", "ssml_gender": "FEMALE", "speaking_rate": 1.05},
+    "de-DE": {"voice": "de-DE-Chirp3-HD-Achernar", "language_code": "de-DE", "ssml_gender": "FEMALE", "speaking_rate": 1.0},
+    "de": {"voice": "de-DE-Chirp3-HD-Achernar", "language_code": "de-DE", "ssml_gender": "FEMALE", "speaking_rate": 1.0},
+    "fr-FR": {"voice": "fr-FR-Chirp3-HD-Achernar", "language_code": "fr-FR", "ssml_gender": "FEMALE", "speaking_rate": 1.0},
+    "fr": {"voice": "fr-FR-Chirp3-HD-Achernar", "language_code": "fr-FR", "ssml_gender": "FEMALE", "speaking_rate": 1.0},
+    "fr-CA": {"voice": "fr-CA-Chirp3-HD-Achernar", "language_code": "fr-CA", "ssml_gender": "FEMALE", "speaking_rate": 1.0},
+    "es-ES": {"voice": "es-ES-Chirp3-HD-Achernar", "language_code": "es-ES", "ssml_gender": "FEMALE", "speaking_rate": 1.0},
+    "es": {"voice": "es-ES-Chirp3-HD-Achernar", "language_code": "es-ES", "ssml_gender": "FEMALE", "speaking_rate": 1.0},
+    "es-US": {"voice": "es-US-Chirp3-HD-Achernar", "language_code": "es-US", "ssml_gender": "FEMALE", "speaking_rate": 1.0},
+    "it-IT": {"voice": "it-IT-Chirp3-HD-Achernar", "language_code": "it-IT", "ssml_gender": "FEMALE", "speaking_rate": 1.0},
+    "it": {"voice": "it-IT-Chirp3-HD-Achernar", "language_code": "it-IT", "ssml_gender": "FEMALE", "speaking_rate": 1.0},
+    "ko-KR": {"voice": "ko-KR-Chirp3-HD-Achernar", "language_code": "ko-KR", "ssml_gender": "FEMALE", "speaking_rate": 1.0},
+    "ko": {"voice": "ko-KR-Chirp3-HD-Achernar", "language_code": "ko-KR", "ssml_gender": "FEMALE", "speaking_rate": 1.0},
+    "cmn-CN": {"voice": "cmn-CN-Chirp3-HD-Achernar", "language_code": "cmn-CN", "ssml_gender": "FEMALE", "speaking_rate": 1.0},
+    "zh-CN": {"voice": "cmn-CN-Chirp3-HD-Achernar", "language_code": "cmn-CN", "ssml_gender": "FEMALE", "speaking_rate": 1.0},
+    "zh": {"voice": "cmn-CN-Chirp3-HD-Achernar", "language_code": "cmn-CN", "ssml_gender": "FEMALE", "speaking_rate": 1.0},
+    "cmn-TW": {"voice": "cmn-TW-Wavenet-A", "language_code": "cmn-TW", "ssml_gender": "FEMALE", "speaking_rate": 1.0},
+    "zh-TW": {"voice": "cmn-TW-Wavenet-A", "language_code": "cmn-TW", "ssml_gender": "FEMALE", "speaking_rate": 1.0},
+    "yue-HK": {"voice": "yue-HK-Chirp3-HD-Achernar", "language_code": "yue-HK", "ssml_gender": "FEMALE", "speaking_rate": 1.0},
+    "zh-HK": {"voice": "yue-HK-Chirp3-HD-Achernar", "language_code": "yue-HK", "ssml_gender": "FEMALE", "speaking_rate": 1.0},
+    "pt-BR": {"voice": "pt-BR-Chirp3-HD-Achernar", "language_code": "pt-BR", "ssml_gender": "FEMALE", "speaking_rate": 1.0},
+    "pt": {"voice": "pt-BR-Chirp3-HD-Achernar", "language_code": "pt-BR", "ssml_gender": "FEMALE", "speaking_rate": 1.0},
+    "pt-PT": {"voice": "pt-PT-Wavenet-E", "language_code": "pt-PT", "ssml_gender": "FEMALE", "speaking_rate": 1.0},
+    "nl-NL": {"voice": "nl-NL-Chirp3-HD-Achernar", "language_code": "nl-NL", "ssml_gender": "FEMALE", "speaking_rate": 1.0},
+    "nl": {"voice": "nl-NL-Chirp3-HD-Achernar", "language_code": "nl-NL", "ssml_gender": "FEMALE", "speaking_rate": 1.0},
+    "nl-BE": {"voice": "nl-BE-Chirp3-HD-Achernar", "language_code": "nl-BE", "ssml_gender": "FEMALE", "speaking_rate": 1.0},
+    "hi-IN": {"voice": "hi-IN-Chirp3-HD-Achernar", "language_code": "hi-IN", "ssml_gender": "FEMALE", "speaking_rate": 1.0},
+    "hi": {"voice": "hi-IN-Chirp3-HD-Achernar", "language_code": "hi-IN", "ssml_gender": "FEMALE", "speaking_rate": 1.0},
+    "ar-XA": {"voice": "ar-XA-Chirp3-HD-Achernar", "language_code": "ar-XA", "ssml_gender": "FEMALE", "speaking_rate": 1.0},
+    "ar": {"voice": "ar-XA-Chirp3-HD-Achernar", "language_code": "ar-XA", "ssml_gender": "FEMALE", "speaking_rate": 1.0},
 }
+
+
+def resolve_voice_for_language(lang: str) -> dict:
+    """Dynamically resolves neural voice parameters for any language code without Japanese leakage."""
+    if not lang:
+        return dict(VOICE_MAPPING["en-US"])
+
+    normalized = lang.strip().replace("_", "-")
+    # 1. Exact match (case-insensitive)
+    for k, v in VOICE_MAPPING.items():
+        if k.lower() == normalized.lower():
+            info = dict(v)
+            info.setdefault("language_code", k if "-" in k else f"{k}-{k.upper()}")
+            return info
+
+    # 2. Language prefix match
+    norm_lower = normalized.lower()
+    prefix = norm_lower.split("-")[0]
+
+    prefix_map = {
+        "ja": "ja-JP",
+        "en": "en-US",
+        "de": "de-DE",
+        "fr": "fr-FR",
+        "es": "es-ES",
+        "it": "it-IT",
+        "ko": "ko-KR",
+        "zh": "cmn-CN",
+        "cmn": "cmn-CN",
+        "pt": "pt-BR",
+        "nl": "nl-NL",
+        "hi": "hi-IN",
+        "ar": "ar-XA",
+    }
+    if prefix in prefix_map:
+        target_key = prefix_map[prefix]
+        info = dict(VOICE_MAPPING[target_key])
+        return info
+
+    # 3. Dynamic BCP-47 candidate or neutral fallback.
+    # Non-Japanese languages NEVER fall back to Japanese! Neutral fallback is strictly en-US.
+    return dict(VOICE_MAPPING["en-US"])
+
+
+resolve_voice_for_locale = resolve_voice_for_language
+
+
+def format_tts_diagnostic_banner(error_msg: str = "", project_id: str = "") -> str:
+    """Formats a loud, actionable diagnostic banner for Cloud TTS failures."""
+    # Detect if arguments were passed as (project_id, error_msg)
+    if error_msg and " " not in error_msg.strip() and project_id and (" " in project_id.strip() or len(project_id.strip()) > 30):
+        proj = error_msg.strip()
+        err = project_id.strip()
+    else:
+        proj = project_id.strip() if project_id else "<PROJECT_ID>"
+        err = error_msg.strip() if error_msg else "Cloud Text-to-Speech API inaccessible"
+
+    banner = [
+        "",
+        "=" * 80,
+        "❌ [Cloud TTS Error] Text-to-Speech API is disabled or inaccessible!",
+        f"   Project ID : {proj}",
+        f"   Error      : {err}",
+        "",
+        "👉 To enable the Cloud Text-to-Speech API, run:",
+        f"   gcloud services enable texttospeech.googleapis.com --project {proj}",
+        "",
+        "👉 If credentials or quota project need configuration, run:",
+        f"   gcloud auth application-default set-quota-project {proj}",
+        "   gcloud auth application-default login",
+        "",
+        f"👉 Or visit: https://console.developers.google.com/apis/api/texttospeech.googleapis.com/overview?project={proj}",
+        "",
+        "👉 For offline testing without Cloud TTS, run with --mock flag.",
+        "=" * 80,
+        ""
+    ]
+    return "\n".join(banner)
+
+
+def validate_tts_readiness(project_id: str = "", lang: str = "en-US", mock: bool = False, no_narration: bool = False) -> tuple:
+    """Validates Cloud TTS API enablement, credentials, and quota project before synthesis.
+
+    Returns:
+        (is_ready: bool, diagnostic_message: str)
+    """
+    if mock or no_narration:
+        return True, "Cloud TTS bypassed (mock or no-narration mode enabled)."
+
+    quota_project = (
+        project_id
+        or os.environ.get("GOOGLE_CLOUD_QUOTA_PROJECT")
+        or os.environ.get("GOOGLE_CLOUD_PROJECT")
+        or os.environ.get("PROJECT_ID")
+    )
+    if not quota_project:
+        try:
+            res = subprocess.run(["gcloud", "config", "get-value", "project"], capture_output=True, text=True)
+            lines = [l.strip() for l in res.stdout.splitlines() if l.strip() and not l.startswith("Your active configuration")]
+            if lines:
+                quota_project = lines[0]
+        except Exception:
+            pass
+
+    try:
+        from google.cloud import texttospeech
+        from google.api_core.client_options import ClientOptions
+
+        client_options = ClientOptions(quota_project_id=quota_project) if quota_project else None
+        client = texttospeech.TextToSpeechClient(client_options=client_options)
+
+        # Lightweight probe
+        v_info = resolve_voice_for_language(lang)
+        voice = texttospeech.VoiceSelectionParams(
+            language_code=v_info.get("language_code", "en-US"),
+            name=v_info["voice"],
+            ssml_gender=getattr(texttospeech.SsmlVoiceGender, v_info.get("ssml_gender", "FEMALE"))
+        )
+        audio_config = texttospeech.AudioConfig(audio_encoding=texttospeech.AudioEncoding.MP3)
+        client.synthesize_speech(
+            input=texttospeech.SynthesisInput(text="Test"),
+            voice=voice,
+            audio_config=audio_config
+        )
+        return True, "Cloud Text-to-Speech API is ready."
+    except Exception as e:
+        diag = format_tts_diagnostic_banner(str(e), quota_project)
+        return False, diag
 
 
 def estimate_speech_duration(text: str, lang: str) -> float:
@@ -69,42 +232,42 @@ def generate_silent_audio(output_path: str, duration_sec: float):
             f.write(b"")
 
 
-def synthesize_scene_audio(text: str, output_path: str, lang: str = "ja-JP", mock: bool = False, project: str = "") -> float:
+def synthesize_scene_audio(text: str, output_path: str, lang: str = "en-US", mock: bool = False, project: str = "") -> float:
     """Synthesizes speech for a single scene via Google Cloud TTS or fallback."""
     if mock:
         duration = estimate_speech_duration(text, lang)
         generate_silent_audio(output_path, duration)
         return duration
 
+    quota_project = (
+        project
+        or os.environ.get("GOOGLE_CLOUD_QUOTA_PROJECT")
+        or os.environ.get("GOOGLE_CLOUD_PROJECT")
+        or os.environ.get("PROJECT_ID")
+    )
+    if not quota_project:
+        try:
+            res = subprocess.run(["gcloud", "config", "get-value", "project"], capture_output=True, text=True)
+            lines = [l.strip() for l in res.stdout.splitlines() if l.strip() and not l.startswith("Your active configuration")]
+            if lines:
+                quota_project = lines[0]
+        except Exception:
+            pass
+
     try:
         from google.cloud import texttospeech
         from google.api_core.client_options import ClientOptions
 
-        quota_project = (
-            project
-            or os.environ.get("GOOGLE_CLOUD_QUOTA_PROJECT")
-            or os.environ.get("GOOGLE_CLOUD_PROJECT")
-            or os.environ.get("PROJECT_ID")
-        )
-        if not quota_project:
-            try:
-                res = subprocess.run(["gcloud", "config", "get-value", "project"], capture_output=True, text=True)
-                lines = [l.strip() for l in res.stdout.splitlines() if l.strip() and not l.startswith("Your active configuration")]
-                if lines:
-                    quota_project = lines[0]
-            except Exception:
-                pass
-
         client_options = ClientOptions(quota_project_id=quota_project) if quota_project else None
         client = texttospeech.TextToSpeechClient(client_options=client_options)
-        v_info = VOICE_MAPPING.get(lang, VOICE_MAPPING["ja-JP"])
-        language_code = lang if "-" in lang else f"{lang}-{lang.upper()}"
+        v_info = resolve_voice_for_language(lang)
+        language_code = v_info.get("language_code") or "en-US"
 
         synthesis_input = texttospeech.SynthesisInput(text=text)
         voice = texttospeech.VoiceSelectionParams(
             language_code=language_code,
             name=v_info["voice"],
-            ssml_gender=getattr(texttospeech.SsmlVoiceGender, v_info["ssml_gender"])
+            ssml_gender=getattr(texttospeech.SsmlVoiceGender, v_info.get("ssml_gender", "FEMALE"))
         )
         audio_config = texttospeech.AudioConfig(
             audio_encoding=texttospeech.AudioEncoding.MP3,
@@ -128,10 +291,9 @@ def synthesize_scene_audio(text: str, output_path: str, lang: str = "ja-JP", moc
         return estimate_speech_duration(text, lang)
 
     except Exception as e:
-        print(f"  ⚠️ Cloud TTS failed ({e}), falling back to simulated speech pacing.", file=sys.stderr)
-        duration = estimate_speech_duration(text, lang)
-        generate_silent_audio(output_path, duration)
-        return duration
+        diag = format_tts_diagnostic_banner(str(e), quota_project)
+        print(diag, file=sys.stderr)
+        raise RuntimeError(f"Cloud TTS synthesis failed: {e}\n{diag}")
 
 
 def split_subtitles(text: str, total_duration: float, lang: str) -> list:
@@ -332,6 +494,13 @@ def synthesize_all(args) -> dict:
     lang = args.lang or ("ja-JP" if os.environ.get("CURRENCY_SYMBOL") in ("¥", "円") else "en-US")
     company = args.company or os.environ.get("COMPANY_NAME", "Enterprise Demo")
     role = args.role or os.environ.get("DEMO_DISPLAY_NAME", "Operations Director")
+    project_id = getattr(args, "project", "") or os.environ.get("PROJECT_ID", "")
+
+    # Proactive preflight validation
+    ready, diag = validate_tts_readiness(project_id=project_id, lang=lang, mock=getattr(args, "mock", False), no_narration=False)
+    if not ready and not getattr(args, "mock", False):
+        print(diag, file=sys.stderr)
+        sys.exit(1)
 
     script_scenes = build_narration_script(company, role, lang, prompts=getattr(args, "prompts", None))
     manifest_scenes = []

@@ -114,6 +114,229 @@ def detect_host_drive_account() -> str:
     return active_acct or "default"
 
 
+def detect_deploy_account(env: dict = None) -> str:
+    """Detects the demo agent deployment destination user account (Tier 2)."""
+    env = env or {}
+    candidates = [
+        env.get("DEPLOYER_EMAIL"),
+        env.get("GCP_ACCOUNT"),
+        env.get("ADMIN_EMAIL"),
+        os.environ.get("DEPLOYER_EMAIL"),
+        os.environ.get("GCP_ACCOUNT"),
+        os.environ.get("ADMIN_EMAIL"),
+    ]
+    for c in candidates:
+        if c and "@" in c and not c.endswith("gserviceaccount.com"):
+            return c.strip()
+    try:
+        res = subprocess.run(["gcloud", "config", "get-value", "account"], capture_output=True, text=True)
+        acct = res.stdout.strip()
+        if acct and "@" in acct and not acct.endswith("gserviceaccount.com"):
+            return acct
+    except Exception:
+        pass
+    return ""
+
+
+def resolve_gcs_bucket(project_id: str = "", configured_bucket: str = "") -> str:
+    """Resolves target GCS bucket according to R3 resolution strategy."""
+    if configured_bucket:
+        return configured_bucket
+    env_b = os.environ.get("GCS_BUCKET") or os.environ.get("GCS_BUCKET_NAME")
+    if env_b:
+        return env_b.strip()
+
+    if not project_id:
+        try:
+            res = subprocess.run(["gcloud", "config", "get-value", "project"], capture_output=True, text=True)
+            lines = [l.strip() for l in res.stdout.splitlines() if l.strip() and not l.startswith("Your active configuration")]
+            if lines:
+                project_id = lines[0]
+        except Exception:
+            pass
+
+    if not project_id:
+        project_id = os.environ.get("GOOGLE_CLOUD_PROJECT") or os.environ.get("PROJECT_ID") or ""
+
+    if not project_id:
+        return "ge-demo-artifacts"
+
+    cand_a = f"{project_id}-ge-demo-artifacts"
+    cand_b = f"{project_id}-demo-videos"
+
+    # Check existence of candidate A or B
+    try:
+        from google.cloud import storage
+        client = storage.Client(project=project_id)
+        if client.bucket(cand_a).exists():
+            return cand_a
+        if client.bucket(cand_b).exists():
+            return cand_b
+    except Exception:
+        pass
+
+    try:
+        res_a = subprocess.run(["gcloud", "storage", "buckets", "describe", f"gs://{cand_a}"], capture_output=True)
+        if res_a.returncode == 0:
+            return cand_a
+        res_b = subprocess.run(["gcloud", "storage", "buckets", "describe", f"gs://{cand_b}"], capture_output=True)
+        if res_b.returncode == 0:
+            return cand_b
+    except Exception:
+        pass
+
+    # Default to Candidate A for creation
+    return cand_a
+
+
+def upload_to_gcs(local_path: str, bucket_name: str, dest_name: str, project_id: str = "", region: str = "us-central1") -> tuple:
+    """Uploads video to GCS using google.cloud.storage with gcloud storage CLI fallback.
+
+    Returns:
+        (gs_uri, console_url, error_message)
+    """
+    gs_uri = f"gs://{bucket_name}/{dest_name}"
+    console_url = (
+        f"https://console.cloud.google.com/storage/browser/{bucket_name}?project={project_id}"
+        if project_id else
+        f"https://console.cloud.google.com/storage/browser/{bucket_name}"
+    )
+
+    # Try Python Client first
+    try:
+        from google.cloud import storage
+        client = storage.Client(project=project_id) if project_id else storage.Client()
+        bucket = client.bucket(bucket_name)
+        if not bucket.exists():
+            print(f"📦 Creating Cloud Storage bucket: gs://{bucket_name} in {region}...")
+            bucket = client.create_bucket(bucket_name, location=region)
+        blob = bucket.blob(dest_name)
+        blob.upload_from_filename(local_path, content_type="video/mp4")
+        return gs_uri, console_url, ""
+    except Exception as py_err:
+        print(f"⚠️ google.cloud.storage upload encountered ({py_err}). Falling back to gcloud storage CLI...", file=sys.stderr)
+
+    # Fallback to gcloud storage CLI
+    try:
+        chk = subprocess.run(["gcloud", "storage", "buckets", "describe", f"gs://{bucket_name}"], capture_output=True)
+        if chk.returncode != 0:
+            print(f"📦 Creating Cloud Storage bucket via gcloud: gs://{bucket_name}...")
+            create_cmd = ["gcloud", "storage", "buckets", "create", f"gs://{bucket_name}", f"--location={region}", "--uniform-bucket-level-access"]
+            if project_id:
+                create_cmd.extend(["--project", project_id])
+            subprocess.run(create_cmd, capture_output=True, check=True)
+
+        cp_cmd = ["gcloud", "storage", "cp", local_path, f"gs://{bucket_name}/{dest_name}"]
+        if project_id:
+            cp_cmd.extend(["--project", project_id])
+        subprocess.run(cp_cmd, capture_output=True, text=True, check=True)
+        return gs_uri, console_url, ""
+    except Exception as cli_err:
+        return "", "", f"GCS upload failed on both Python API and CLI: {cli_err}"
+
+
+def verify_delivery_destinations(project_id: str = "", drive_account: str = "",
+                                 deploy_account: str = "", configured_bucket: str = "",
+                                 skip_drive: bool = False) -> dict:
+    """Performs pre-flight verification across all 3 storage delivery tiers in advance.
+
+    Returns a structured summary with confirmed_tier, confirmed_destination,
+    and per-tier diagnostic details.
+    """
+    target_account = drive_account or detect_host_drive_account()
+    resolved_deploy = deploy_account or detect_deploy_account()
+    resolved_bucket = resolve_gcs_bucket(project_id, configured_bucket)
+
+    info = {
+        "tier_1": {
+            "name": "Tier 1: Host Operator Drive",
+            "account": target_account,
+            "verified": False,
+            "status": "unverified",
+            "reason": ""
+        },
+        "tier_2": {
+            "name": "Tier 2: Deploy Destination Drive",
+            "account": resolved_deploy,
+            "verified": False,
+            "status": "unverified",
+            "reason": ""
+        },
+        "tier_3": {
+            "name": "Tier 3: Google Cloud Storage",
+            "bucket": resolved_bucket,
+            "verified": True,
+            "status": "verified",
+            "reason": "Cloud Storage write / bucket resolution available"
+        },
+        "confirmed_tier": "tier_3_gcs",
+        "confirmed_destination": ""
+    }
+
+    env_skip = os.environ.get("SKIP_DRIVE_UPLOAD", "").strip().lower() in ("1", "true", "yes")
+    if skip_drive or env_skip:
+        info["tier_1"]["status"] = "skipped"
+        info["tier_1"]["reason"] = "--skip-drive requested"
+        info["tier_2"]["status"] = "skipped"
+        info["tier_2"]["reason"] = "--skip-drive requested"
+        info["confirmed_tier"] = "tier_3_gcs"
+        info["confirmed_destination"] = f"Tier 3: Google Cloud Storage (gs://{resolved_bucket}/) [Drive skipped]"
+        return info
+
+    # Check Tier 1
+    if gdrive_cli_available() and (target_account.endswith("@google.com") or not target_account or target_account == "default"):
+        info["tier_1"]["verified"] = True
+        info["tier_1"]["status"] = "verified"
+        info["tier_1"]["reason"] = "Native gdrive CLI available"
+        info["confirmed_tier"] = "tier_1_operator_drive"
+        info["confirmed_destination"] = f"Tier 1: Google Drive (Host: {target_account}) [gdrive CLI Verified]"
+        return info
+    else:
+        t1_token = drive_access_token(target_account)
+        if t1_token:
+            test_info, test_status, _ = drive_request(t1_token, "GET", f"{DRIVE_API}/about?fields=user")
+            if test_status == 200:
+                info["tier_1"]["verified"] = True
+                info["tier_1"]["status"] = "verified"
+                info["tier_1"]["reason"] = "Drive v3 REST API scope verified"
+                info["confirmed_tier"] = "tier_1_operator_drive"
+                info["confirmed_destination"] = f"Tier 1: Google Drive (Host: {target_account}) [Scope Verified]"
+                return info
+            else:
+                info["tier_1"]["status"] = "scope_insufficient"
+                info["tier_1"]["reason"] = f"HTTP {test_status} (requires --enable-gdrive-access)"
+        else:
+            info["tier_1"]["status"] = "missing_token"
+            info["tier_1"]["reason"] = "No access token available"
+
+    # Check Tier 2
+    if resolved_deploy and resolved_deploy != target_account:
+        t2_token = drive_access_token(resolved_deploy)
+        if t2_token:
+            test_info2, test_status2, _ = drive_request(t2_token, "GET", f"{DRIVE_API}/about?fields=user")
+            if test_status2 == 200:
+                info["tier_2"]["verified"] = True
+                info["tier_2"]["status"] = "verified"
+                info["tier_2"]["reason"] = "Drive v3 REST API scope verified"
+                info["confirmed_tier"] = "tier_2_deploy_drive"
+                info["confirmed_destination"] = f"Tier 2: Google Drive (Deploy Tenant: {resolved_deploy}) [Scope Verified]"
+                return info
+            else:
+                info["tier_2"]["status"] = "scope_insufficient"
+                info["tier_2"]["reason"] = f"HTTP {test_status2}"
+        else:
+            info["tier_2"]["status"] = "missing_token"
+            info["tier_2"]["reason"] = "No access token available"
+    else:
+        info["tier_2"]["status"] = "skipped"
+        info["tier_2"]["reason"] = "No distinct deploy account configured"
+
+    # Tier 3 (Cloud Storage fallback)
+    info["confirmed_tier"] = "tier_3_gcs"
+    info["confirmed_destination"] = f"Tier 3: Google Cloud Storage (gs://{resolved_bucket}/) [Drive scopes unavailable]"
+    return info
+
+
 def drive_access_token(account: str = "") -> str:
     """Retrieves access token from gcloud for a specific account or active account."""
     cmd = ["gcloud", "auth", "print-access-token"]
@@ -295,12 +518,17 @@ def deliver_video(
     skip_drive: bool = False,
     drive_account: str = "",
     drive_folder: str = "",
-    share_public: bool = False
+    share_public: bool = False,
+    project_id: str = "",
+    deploy_account: str = "",
+    gcs_bucket: str = ""
 ) -> dict:
-    """Delivers video to local deliverables and Google Drive.
+    """Delivers the rendered MP4 demo video using the 3-Tier Storage Delivery hierarchy.
 
-    Prioritizes the execution environment's Google account rather than the demo deployment tenant.
-    Defaults to owner-only private permissions (no public link sharing).
+    Hierarchy:
+    - Tier 1 (Primary): Host operator Google Drive account (execution environment user)
+    - Tier 2 (Secondary): Deploy destination Google Drive account (demo deploy tenant user)
+    - Tier 3 (Tertiary Fallback): Demo agent deployment Google Cloud project Cloud Storage bucket
     """
     os.makedirs(outdir, exist_ok=True)
     clean_name = (f"[Demo-Video] {company} - {role}" + (f" ({suffix})" if suffix else "")).replace("/", "-").replace(" ", "_")
@@ -310,9 +538,11 @@ def deliver_video(
         shutil.copy2(video_path, local_dest)
         print(f"📁 Local deliverable preserved at: {local_dest}")
 
-    # Resolve target account dynamically without hardcoding
+    # Resolve target accounts dynamically without hardcoding
     target_account = drive_account.strip() or detect_host_drive_account()
     target_folder_name = drive_folder.strip() or f"GE Demo - {company}"
+    resolved_deploy = deploy_account.strip() or detect_deploy_account()
+    resolved_project = project_id.strip() or os.environ.get("GOOGLE_CLOUD_PROJECT") or os.environ.get("PROJECT_ID") or ""
 
     result = {
         "local_path": local_dest,
@@ -325,24 +555,28 @@ def deliver_video(
         "drive_file_id": "",
         "drive_url": "",
         "folder_url": "",
+        "gcs_uri": "",
+        "gcs_console_url": "",
+        "delivery_tier": "none",
         "upload_status": "pending"
     }
 
     env_skip = os.environ.get("SKIP_DRIVE_UPLOAD", "").strip().lower() in ("1", "true", "yes")
     if skip_drive or env_skip:
-        print("ℹ️ Google Drive upload skipped (SKIP_DRIVE_UPLOAD or --skip-drive).")
+        print("ℹ️ Google Drive upload skipped (SKIP_DRIVE_UPLOAD or --skip-drive). Deliverable preserved locally.")
         result["upload_status"] = "skipped"
         return result
 
-    print(f"🎯 Target Google Drive Account: {target_account}")
-    print(f"📂 Target Folder               : {target_folder_name}")
-    print(f"🔒 Sharing Mode                : {'Public Link' if share_public else 'Owner-only Private'}")
+    print(f"🎯 Target Google Drive Account (Tier 1): {target_account}")
+    print(f"📂 Target Folder                       : {target_folder_name}")
+    print(f"🔒 Sharing Mode                        : {'Public Link' if share_public else 'Owner-only Private'}")
 
     # ---------------------------------------------------------
-    # PATH A: Internal Google Environment (via gdrive CLI)
+    # TIER 1: Host Operator Google Drive
     # ---------------------------------------------------------
+    # Path A: Internal Google Environment (via gdrive CLI)
     if gdrive_cli_available() and (target_account.endswith("@google.com") or not target_account or target_account == "default"):
-        print("🚀 Using native Google Drive CLI engine...")
+        print("🚀 [Tier 1] Using native Google Drive CLI engine...")
         folder_id, folder_url = gdrive_find_folder(target_folder_name)
         if not folder_id:
             print(f"Creating Drive folder: '{target_folder_name}'...")
@@ -356,68 +590,113 @@ def deliver_video(
             if file_id:
                 result["drive_file_id"] = file_id
                 result["drive_url"] = web_link
+                result["delivery_tier"] = "tier_1_operator_drive"
                 result["upload_status"] = "success"
                 if share_public:
                     print("  Enabling public link sharing...")
                     subprocess.run([GDRIVE_BIN, "mutate", "share", file_id, "--type", "anyone", "--role", "reader"], capture_output=True)
                 else:
                     print("  🔒 Keeping file permissions private to owner.")
-                print(f"  ✅ Uploaded to Google Drive: {web_link}")
+                print(f"  ✅ Uploaded to Tier 1 Google Drive: {web_link}")
                 return result
             else:
-                print(f"  ⚠️ gdrive CLI upload encountered: {err}. Attempting REST API fallback...", file=sys.stderr)
+                print(f"  ⚠️ [Tier 1] gdrive CLI upload encountered: {err}. Advancing to REST API...", file=sys.stderr)
 
-    # ---------------------------------------------------------
-    # PATH B: Standard REST API (via gcloud auth print-access-token)
-    # ---------------------------------------------------------
+    # Path B: Standard REST API (via gcloud auth print-access-token)
     token = drive_access_token(target_account)
-    if not token:
-        print("ℹ️ Missing Google Drive access token. Video preserved locally only.")
-        print(f"   Run `gcloud auth login --enable-gdrive-access --account={target_account}` to enable Drive uploads.")
-        result["upload_status"] = "skipped"
-        return result
-
-    test_info, test_status, _ = drive_request(token, "GET", f"{DRIVE_API}/about?fields=user")
-    if test_status != 200:
-        print(f"⚠️ Drive scope insufficient ({test_status}) for account '{target_account}'. Video saved locally only.")
-        print(f"   Run `gcloud auth login --enable-gdrive-access --account={target_account}`.")
-        result["upload_status"] = "scope_insufficient"
-        return result
-
-    folder_id = drive_find_folder(token, target_folder_name)
-    if not folder_id:
-        print(f"Creating Drive folder: '{target_folder_name}'...")
-        folder_id = drive_create_folder(token, target_folder_name)
-
-    if not folder_id:
-        print("⚠️ Could not establish target Drive folder via REST API.", file=sys.stderr)
-        return result
-
-    result["folder_id"] = folder_id
-    result["folder_url"] = f"https://drive.google.com/drive/folders/{folder_id}"
-
-    print(f"Uploading {os.path.basename(local_dest)} to Google Drive via REST API...")
-    file_id, web_link, err = drive_upload_video(token, local_dest, folder_id, f"{clean_name}.mp4")
-    if file_id:
-        if share_public:
-            print("  Enabling public link sharing...")
-            enable_link_sharing(token, file_id)
+    if token:
+        test_info, test_status, _ = drive_request(token, "GET", f"{DRIVE_API}/about?fields=user")
+        if test_status == 200:
+            folder_id = drive_find_folder(token, target_folder_name)
+            if not folder_id:
+                print(f"Creating Drive folder: '{target_folder_name}'...")
+                folder_id = drive_create_folder(token, target_folder_name)
+            if folder_id:
+                result["folder_id"] = folder_id
+                result["folder_url"] = f"https://drive.google.com/drive/folders/{folder_id}"
+                print(f"Uploading {os.path.basename(local_dest)} to Google Drive via REST API...")
+                file_id, web_link, err = drive_upload_video(token, local_dest, folder_id, f"{clean_name}.mp4")
+                if file_id:
+                    if share_public:
+                        print("  Enabling public link sharing...")
+                        enable_link_sharing(token, file_id)
+                    else:
+                        print("  🔒 Keeping file permissions private to owner.")
+                    result["drive_file_id"] = file_id
+                    result["drive_url"] = web_link
+                    result["delivery_tier"] = "tier_1_operator_drive"
+                    result["upload_status"] = "success"
+                    print(f"  ✅ Uploaded to Tier 1 Google Drive: {web_link}")
+                    return result
+                else:
+                    print(f"  ⚠️ [Tier 1] Drive upload failed: {err}. Advancing to Tier 2...", file=sys.stderr)
+            else:
+                print("  ⚠️ [Tier 1] Could not establish target Drive folder via REST API. Advancing to Tier 2...", file=sys.stderr)
         else:
-            print("  🔒 Keeping file permissions private to owner.")
-        result["drive_file_id"] = file_id
-        result["drive_url"] = web_link
-        result["upload_status"] = "success"
-        print(f"  ✅ Uploaded to Google Drive: {web_link}")
+            print(f"  ⚠️ [Tier 1] Drive scope insufficient ({test_status}) for account '{target_account}'. Advancing to Tier 2...", file=sys.stderr)
     else:
-        print(f"  ❌ Drive upload failed: {err}", file=sys.stderr)
+        print(f"  ℹ️ [Tier 1] Missing Google Drive access token for '{target_account}'. Advancing to Tier 2...", file=sys.stderr)
+
+    # ---------------------------------------------------------
+    # TIER 2: Demo Agent Deploy Destination Account Drive
+    # ---------------------------------------------------------
+    if resolved_deploy and resolved_deploy != target_account:
+        print(f"🚀 [Tier 2] Attempting delivery to deploy destination Drive ({resolved_deploy})...")
+        t2_token = drive_access_token(resolved_deploy)
+        if t2_token:
+            test_info, test_status, _ = drive_request(t2_token, "GET", f"{DRIVE_API}/about?fields=user")
+            if test_status == 200:
+                folder_id = drive_find_folder(t2_token, target_folder_name)
+                if not folder_id:
+                    folder_id = drive_create_folder(t2_token, target_folder_name)
+                if folder_id:
+                    result["folder_id"] = folder_id
+                    result["folder_url"] = f"https://drive.google.com/drive/folders/{folder_id}"
+                    file_id, web_link, err = drive_upload_video(t2_token, local_dest, folder_id, f"{clean_name}.mp4")
+                    if file_id:
+                        if share_public:
+                            enable_link_sharing(t2_token, file_id)
+                        result["drive_file_id"] = file_id
+                        result["drive_url"] = web_link
+                        result["target_account"] = resolved_deploy
+                        result["delivery_tier"] = "tier_2_deploy_drive"
+                        result["upload_status"] = "success"
+                        print(f"  ✅ Uploaded to Tier 2 Google Drive: {web_link}")
+                        return result
+                    else:
+                        print(f"  ⚠️ [Tier 2] Upload failed: {err}. Advancing to Tier 3...", file=sys.stderr)
+            else:
+                print(f"  ⚠️ [Tier 2] Scope insufficient ({test_status}) for '{resolved_deploy}'. Advancing to Tier 3...", file=sys.stderr)
+        else:
+            print(f"  ℹ️ [Tier 2] Access token unavailable for '{resolved_deploy}'. Advancing to Tier 3...", file=sys.stderr)
+
+    # ---------------------------------------------------------
+    # TIER 3: Google Cloud Project Cloud Storage Bucket Fallback
+    # ---------------------------------------------------------
+    print("🚀 [Tier 3] Falling back to Google Cloud Storage...")
+    bucket_name = resolve_gcs_bucket(resolved_project, gcs_bucket)
+    dest_name = f"{clean_name}.mp4"
+    gs_uri, console_url, err = upload_to_gcs(local_dest, bucket_name, dest_name, project_id=resolved_project)
+    if gs_uri:
+        result["delivery_tier"] = "tier_3_gcs"
+        result["upload_status"] = "success"
+        result["gcs_uri"] = gs_uri
+        result["gcs_console_url"] = console_url
+        result["console_url"] = console_url
+        result["storage_url"] = f"https://storage.cloud.google.com/{bucket_name}/{dest_name}"
+        print(f"  ✅ Uploaded to Tier 3 Cloud Storage: {gs_uri}")
+        print(f"  🔗 Cloud Console URL: {console_url}")
+        return result
+    else:
+        print(f"  ❌ Tier 3 Cloud Storage upload failed: {err}", file=sys.stderr)
+        result["delivery_tier"] = "none"
         result["upload_status"] = "failed"
         result["error"] = err
-
-    return result
+        return result
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Deliver demo video to Google Drive.")
+    parser = argparse.ArgumentParser(description="Deliver demo video using 3-tier storage hierarchy.")
     parser.add_argument("--video", required=True, help="Path to rendered MP4 video")
     parser.add_argument("--company", default="Enterprise", help="Company name")
     parser.add_argument("--role", default="Operations Director", help="Agent role")
@@ -425,6 +704,9 @@ def main():
     parser.add_argument("--outdir", default="./deliverables", help="Local directory for deliverables")
     parser.add_argument("--drive-account", default="", help="Target Google Drive account (defaults to execution environment account)")
     parser.add_argument("--drive-folder", default="", help="Google Drive folder name override")
+    parser.add_argument("--deploy-account", default="", help="Deploy destination account for Tier 2 Drive delivery")
+    parser.add_argument("--gcs-bucket", default="", help="Google Cloud Storage fallback bucket")
+    parser.add_argument("--project", default="", help="Google Cloud project ID")
     parser.add_argument("--share-public", action="store_true", help="Enable public link sharing (default: False, owner-only private)")
     parser.add_argument("--skip-drive", action="store_true", help="Skip Google Drive upload (save to ./deliverables/ only)")
     args = parser.parse_args()
@@ -439,15 +721,21 @@ def main():
         drive_account=args.drive_account,
         drive_folder=args.drive_folder,
         share_public=args.share_public,
+        project_id=args.project,
+        deploy_account=args.deploy_account,
+        gcs_bucket=args.gcs_bucket,
     )
     print("\n" + "=" * 60)
     print("🎥 Video Delivery Summary")
     print(f"   Local File    : {res['local_path']}")
-    print(f"   Target Account: {res.get('target_account', 'N/A')}")
-    print(f"   Sharing Mode  : {res.get('sharing_mode', 'N/A')}")
+    print(f"   Delivery Tier : {res.get('delivery_tier', 'N/A')}")
+    print(f"   Upload Status : {res.get('upload_status', 'N/A')}")
     if res.get("drive_url"):
         print(f"   Drive File    : {res['drive_url']}")
         print(f"   Folder URL    : {res['folder_url']}")
+    if res.get("gcs_uri"):
+        print(f"   GCS URI       : {res['gcs_uri']}")
+        print(f"   Console URL   : {res.get('gcs_console_url', 'N/A')}")
     print("=" * 60)
 
 

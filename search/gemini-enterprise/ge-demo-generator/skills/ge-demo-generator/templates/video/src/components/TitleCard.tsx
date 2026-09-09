@@ -219,16 +219,6 @@ export interface AgendaItem {
   icon: string;
 }
 
-const DEFAULT_AGENDA_ITEMS_JA: AgendaItem[] = [
-  { number: 1, title: "初期対話と状況把握", subtitle: "コア機能と全店舗オペレーション状況の確認", icon: "💬" },
-  { number: 2, title: "メタデータと製品カタログ探索", subtitle: "製品カタログ・店舗一覧の基幹スキーマ確認", icon: "📦" },
-  { number: 3, title: "複合データ分析と不整合検知", subtitle: "BigQuery注文履歴と外部台帳の突合・異常値抽出", icon: "📊" },
-  { number: 4, title: "即時アクションとワークフロー承認", subtitle: "緊急在庫再配分アクション起票とワンクリック承認", icon: "⚡" },
-  { number: 5, title: "根本原因分析と品質検査", subtitle: "センサーテレメトリとロット別不良率の分析", icon: "🔍" },
-  { number: 6, title: "生産計画シミュレーション", subtitle: "供給制約下の製造ライン処理能力シミュレーション", icon: "📈" },
-  { number: 7, title: "業務サマリーと推奨事項", subtitle: "本日の対応完了サマリーと明日の発注推奨レポート", icon: "📝" },
-];
-
 export const DEFAULT_AGENDA_ITEMS_EN: AgendaItem[] = [
   { number: 1, title: "Welcome & Overview", subtitle: "Operational briefing and priority status alerts", icon: "💬" },
   { number: 2, title: "Metadata & Catalog Discovery", subtitle: "Structured catalog and plant equipment schema", icon: "📦" },
@@ -239,10 +229,13 @@ export const DEFAULT_AGENDA_ITEMS_EN: AgendaItem[] = [
   { number: 7, title: "Operational Summary & Handover", subtitle: "Consolidated actions summary & procurement report", icon: "📝" },
 ];
 
-export const AgendaCard: React.FC<{ company: string; role: string; items?: AgendaItem[] }> = ({
+export const DEFAULT_AGENDA_ITEMS = DEFAULT_AGENDA_ITEMS_EN;
+
+export const AgendaCard: React.FC<{ company: string; role: string; items?: AgendaItem[]; brand?: BrandConfig }> = ({
   company,
   role,
-  items = DEFAULT_AGENDA_ITEMS_JA,
+  items = DEFAULT_AGENDA_ITEMS_EN,
+  brand,
 }) => {
   const frame = useCurrentFrame();
   const opacity = interpolate(frame, [0, 15], [0, 1], { extrapolateRight: "clamp" });

@@ -42,7 +42,7 @@ def build_manifest(actions_path: str, narration_path: str, output_path: str, ena
 
     company = narration_data.get("company", "Enterprise")
     role = narration_data.get("role", "AI Operations Director")
-    lang = narration_data.get("language", "ja-JP")
+    lang = narration_data.get("language", "en-US")
     raw_video_path = actions_data.get("raw_video_path", "raw_recording.mp4")
 
     # Map narration scenes by scene_id
@@ -57,12 +57,12 @@ def build_manifest(actions_path: str, narration_path: str, output_path: str, ena
     intro_narration = narration_by_id.get("intro")
     intro_dur_sec = max(INTRO_DURATION_SEC, intro_narration.get("duration_sec", INTRO_DURATION_SEC) + 0.8) if intro_narration else INTRO_DURATION_SEC
     intro_frames = int(intro_dur_sec * FPS)
-    if intro_narration:
+    if intro_narration and intro_narration.get("audio_file"):
         audio_clips.append({
             "id": "audio_intro",
             "file": intro_narration["audio_file"],
             "startFrame": current_frame + 10,
-            "durationFrames": int(intro_narration["duration_sec"] * FPS)
+            "durationFrames": int(intro_narration.get("duration_sec", INTRO_DURATION_SEC) * FPS)
         })
         for sub in intro_narration.get("subtitles", []):
             all_subtitles.append({
@@ -91,12 +91,13 @@ def build_manifest(actions_path: str, narration_path: str, output_path: str, ena
     if agenda_narration:
         agenda_dur_sec = max(3.5, agenda_narration.get("duration_sec", 3.5) + 0.8)
         agenda_frames = int(agenda_dur_sec * FPS)
-        audio_clips.append({
-            "id": "audio_agenda",
-            "file": agenda_narration["audio_file"],
-            "startFrame": current_frame + 10,
-            "durationFrames": int(agenda_narration["duration_sec"] * FPS)
-        })
+        if agenda_narration.get("audio_file"):
+            audio_clips.append({
+                "id": "audio_agenda",
+                "file": agenda_narration["audio_file"],
+                "startFrame": current_frame + 10,
+                "durationFrames": int(agenda_narration.get("duration_sec", 3.5) * FPS)
+            })
         for sub in agenda_narration.get("subtitles", []):
             all_subtitles.append({
                 "startFrame": current_frame + 10 + int(sub["start_sec"] * FPS),
@@ -107,7 +108,7 @@ def build_manifest(actions_path: str, narration_path: str, output_path: str, ena
         timeline_scenes.append({
             "id": "scene_agenda",
             "type": "agenda_card",
-            "title": "実演デモシナリオ一覧" if lang.startswith("ja") else "Walkthrough Agenda",
+            "title": agenda_narration.get("title") or "Walkthrough Agenda",
             "subtitle": f"{company} — {role}",
             "startFrame": current_frame,
             "durationFrames": agenda_frames,
@@ -142,7 +143,9 @@ def build_manifest(actions_path: str, narration_path: str, output_path: str, ena
 
         # Timeline segments for this scene:
         dur_typing_sec = max(1.5, t_submit - t_type_start)
-        raw_wait_sec = max(0.5, t_resp_comp - t_submit)
+        t_wait_start = act.get("t_wait_start", t_submit)
+        t_wait_end = act.get("t_response_start", t_resp_comp)
+        raw_wait_sec = max(0.5, t_wait_end - t_wait_start)
         ff_wait_sec = raw_wait_sec / FAST_FORWARD_FACTOR
         raw_recorded_resp_sec = max(4.0, t_scene_raw_end - t_resp_comp)
 
@@ -269,14 +272,14 @@ def build_manifest(actions_path: str, narration_path: str, output_path: str, ena
                         "text": sub["text"],
                         "position": "bottom"
                     })
-        elif scene_narr:
+        elif scene_narr and scene_narr.get("audio_file"):
             narr_start_frame = current_frame
             typing_end_frame = current_frame + int(dur_typing_sec * FPS)
             audio_clips.append({
                 "id": f"audio_{scene_id}",
                 "file": scene_narr["audio_file"],
                 "startFrame": narr_start_frame,
-                "durationFrames": int(scene_narr["duration_sec"] * FPS)
+                "durationFrames": int(scene_narr.get("duration_sec", 10.0) * FPS)
             })
             for sub in scene_narr.get("subtitles", []):
                 sub_start = narr_start_frame + int(sub["start_sec"] * FPS)
@@ -295,12 +298,12 @@ def build_manifest(actions_path: str, narration_path: str, output_path: str, ena
     outro_narration = narration_by_id.get("outro")
     outro_dur_sec = max(OUTRO_DURATION_SEC, outro_narration.get("duration_sec", OUTRO_DURATION_SEC) + 0.8) if outro_narration else OUTRO_DURATION_SEC
     outro_frames = int(outro_dur_sec * FPS)
-    if outro_narration:
+    if outro_narration and outro_narration.get("audio_file"):
         audio_clips.append({
             "id": "audio_outro",
             "file": outro_narration["audio_file"],
             "startFrame": current_frame + 10,
-            "durationFrames": int(outro_narration["duration_sec"] * FPS)
+            "durationFrames": int(outro_narration.get("duration_sec", OUTRO_DURATION_SEC) * FPS)
         })
         for sub in outro_narration.get("subtitles", []):
             all_subtitles.append({

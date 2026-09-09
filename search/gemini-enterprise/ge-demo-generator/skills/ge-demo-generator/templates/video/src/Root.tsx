@@ -16,15 +16,16 @@ import React from "react";
 import { Composition } from "remotion";
 import { DemoHighlightReel } from "./DemoHighlightReel";
 import { VideoManifestProps } from "./types";
+import activeManifest from "./manifest.json";
 
-const defaultProps: VideoManifestProps = {
+const fallbackNeutralProps: VideoManifestProps = {
   company: "Enterprise Demo",
   role: "AI Operations Director",
   fps: 30,
   width: 1920,
   height: 1080,
-  totalFrames: 2700,
-  totalDurationSec: 90.0,
+  totalFrames: 3600,
+  totalDurationSec: 120.0,
   rawVideoFile: "raw_recording.mp4",
   scenes: [
     {
@@ -38,29 +39,29 @@ const defaultProps: VideoManifestProps = {
     {
       id: "prompt_1",
       type: "browser_screen",
-      title: "Scene 1: Welcome & Overview",
+      title: "Scene 1: Welcome & Situational Briefing",
       startFrame: 90,
-      durationFrames: 720,
+      durationFrames: 1140,
       camera: {
         response: { x: 960, y: 540, scale: 1.10 },
       },
     },
     {
-      id: "prompt_3",
+      id: "prompt_2",
       type: "browser_screen",
-      title: "Scene 2: Cross-Source Anomaly Detection",
-      startFrame: 810,
-      durationFrames: 900,
+      title: "Scene 2: Data Analysis & Anomaly Detection",
+      startFrame: 1230,
+      durationFrames: 1140,
       camera: {
         response: { x: 960, y: 500, scale: 1.10 },
       },
     },
     {
-      id: "prompt_4",
+      id: "prompt_3",
       type: "browser_screen",
       title: "Scene 3: Immediate Workflow Execution",
-      startFrame: 1710,
-      durationFrames: 900,
+      startFrame: 2370,
+      durationFrames: 1140,
       camera: {
         response: { x: 960, y: 580, scale: 1.10 },
       },
@@ -70,57 +71,80 @@ const defaultProps: VideoManifestProps = {
       type: "outro_card",
       title: "Gemini Enterprise for Enterprise Demo",
       subtitle: "Autonomous Agent Orchestration — Powered by Google Cloud",
-      startFrame: 2610,
+      startFrame: 3510,
       durationFrames: 90,
     },
   ],
-  audioClips: [],
+  audioClips: [
+    {
+      id: "audio_intro",
+      file: "audio_intro.mp3",
+      startFrame: 10,
+      durationFrames: 80,
+    },
+    {
+      id: "audio_prompt_1",
+      file: "audio_prompt_1.mp3",
+      startFrame: 100,
+      durationFrames: 300,
+    },
+    {
+      id: "audio_outro",
+      file: "audio_outro.mp3",
+      startFrame: 3520,
+      durationFrames: 80,
+    },
+  ],
   subtitles: [
     {
       startFrame: 10,
       endFrame: 80,
-      text: "Gemini Enterprise 自律型AIエージェントのデモ実演",
+      text: "Demonstration of Gemini Enterprise autonomous AI agent capabilities",
     },
     {
       startFrame: 100,
       endFrame: 300,
-      text: "基本機能と現在のオペレーション状況を確認します",
+      text: "Reviewing core functions and real-time operational status",
     },
     {
-      startFrame: 820,
-      endFrame: 1100,
-      text: "BigQuery注文履歴と外部サプライヤー台帳を突合し、異常値を自律検知",
-    },
-    {
-      startFrame: 1720,
-      endFrame: 2000,
-      text: "検知された課題に対し、是正アクションをワンクリックで即座に承認・実行",
-    },
-    {
-      startFrame: 2620,
-      endFrame: 2690,
-      text: "Gemini Enterpriseが企業の基幹業務オペレーションを変革します",
+      startFrame: 3520,
+      endFrame: 3590,
+      text: "Gemini Enterprise transforms enterprise operations and workflow automation",
     },
   ],
+  brand: {
+    enabled: false,
+    primaryColor: "#1A73E8",
+    accentColor: "#E8F0FE",
+  },
 };
+
+const resolvedDefaultProps: VideoManifestProps =
+  activeManifest && (activeManifest as any).totalFrames && (activeManifest as any).scenes?.length > 0
+    ? (activeManifest as unknown as VideoManifestProps)
+    : fallbackNeutralProps;
 
 export const RemotionRoot: React.FC = () => {
   return (
     <Composition<any, VideoManifestProps>
       id="DemoHighlightReel"
       component={DemoHighlightReel}
-      durationInFrames={2700}
-      fps={30}
-      width={1920}
-      height={1080}
-      defaultProps={defaultProps}
+      durationInFrames={resolvedDefaultProps.totalFrames || 3600}
+      fps={resolvedDefaultProps.fps || 30}
+      width={resolvedDefaultProps.width || 1920}
+      height={resolvedDefaultProps.height || 1080}
+      defaultProps={resolvedDefaultProps}
       calculateMetadata={({ props }) => {
+        const effective =
+          props && props.totalFrames && props.scenes?.length > 0
+            ? props
+            : resolvedDefaultProps;
         return {
-          durationInFrames: props.totalFrames || 2700,
-          fps: props.fps || 30,
-          width: props.width || 1920,
-          height: props.height || 1080,
-          props,
+          durationInFrames: effective.totalFrames || 3600,
+          fps: effective.fps || 30,
+          width: effective.width || 1920,
+          height: effective.height || 1080,
+          props: effective,
         };
       }}
     />
