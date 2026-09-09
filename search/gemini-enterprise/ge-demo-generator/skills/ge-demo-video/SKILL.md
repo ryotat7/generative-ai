@@ -102,8 +102,16 @@ Automates the end-to-end production and delivery of professional **90–120s exe
    ================================================================================
    ```
 
+   *If Pre-Flight indicates expired credentials (`reauth_required`), append notice:*
+   ```
+   ⚠️ Note: Credentials expired for <account>. Run to re-authenticate:
+      gcloud auth login <account> --enable-gdrive-access
+   ```
+
 3. **Mandatory `ask_question` Approval Gate**:
-   Execute `ask_question` with the following selectable options:
+   Execute `ask_question` with the following selectable options.
+   *(If `reauth_required` is detected on Tier 1, prioritize the single-click re-authentication action)*:
+   - *(If reauth required)*: `(Recommended) Re-authenticate Google account now (Agent will run 'gcloud auth login <account> --enable-gdrive-access')`
    - `(Recommended) Approve and proceed with video generation as planned`
    - `Modify demo prompts / Select specific scenarios`
    - `Change language / voice settings (e.g. ja-JP / en-US)`
@@ -112,6 +120,7 @@ Automates the end-to-end production and delivery of professional **90–120s exe
    - `Change Google Drive / GCS delivery target`
    - `Cancel video generation`
 
+   *If the user selects re-authentication, execute the login command directly via `run_command` and re-verify pre-flight before continuing.*
    *If the user requests modifications, update the plan and prompt again. Never start recording without explicit user approval.*
 
 ---
@@ -188,6 +197,25 @@ Key execution features:
    - The final video is **always staged locally** in `./deliverables/[Demo-Video]_<Company>_-<Role>.mp4` regardless of remote upload status.
 3. **Present Output**:
    - Display local deliverable path, remote delivery destination (Tier 1 Drive / Tier 2 Drive / Tier 3 GCS), video duration, and resolution (1080p 30fps).
+4. **Automated Post-Generation Interactive Delivery Recovery Gate**:
+   - **Zero Copy-Paste Mandate**: If the video was successfully generated and staged in `./deliverables/[Demo-Video]_<Company>_-<Role>.mp4` but Google Drive delivery failed or was skipped due to expired OAuth credentials (`reauth_required`), the agent **MUST NEVER** ask the user to manually copy and paste bash upload commands.
+   - **Interactive Recovery via `ask_question`**: The agent **MUST IMMEDIATELY** invoke `ask_question` offering automated re-authentication and recovery upload:
+     - `(Recommended) Authenticate now and upload the generated video to Google Drive`
+     - `Keep local deliverable only (and Cloud Storage if uploaded)`
+   - **Single-Click Automated Execution**: Upon user selection of the recommended option, the agent automatically executes:
+     1. Re-authentication via `run_command`:
+        ```bash
+        gcloud auth login <account> --enable-gdrive-access
+        ```
+     2. Standalone Drive delivery via `run_command`:
+        ```bash
+        python3 skills/ge-demo-generator/templates/video/scripts/upload_to_drive.py \
+          --video "./deliverables/[Demo-Video]_${COMPANY}_-_${ROLE}.mp4" \
+          --company "${COMPANY}" \
+          --role "${ROLE}" \
+          --drive-account "${DRIVE_ACCOUNT}"
+        ```
+     3. Present the confirmed Google Drive file URL and folder URL directly in the chat response.
 
 ---
 

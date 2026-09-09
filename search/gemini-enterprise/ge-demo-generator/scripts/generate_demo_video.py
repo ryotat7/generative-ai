@@ -464,7 +464,13 @@ def format_demo_plan_overview(
         f"🔒 Confirmed Destination  : {dest_info['confirmed_destination']}",
     ]
 
-    if dest_info.get("tier_1", {}).get("status") == "scope_insufficient":
+    if dest_info.get("tier_1", {}).get("status") == "reauth_required":
+        lines.extend([
+            "",
+            f"⚠️ Note: Credentials expired for {t1_acct}. Run to re-authenticate:",
+            f"   gcloud auth login {t1_acct} --enable-gdrive-access"
+        ])
+    elif dest_info.get("tier_1", {}).get("status") == "scope_insufficient":
         lines.extend([
             "",
             f"💡 Note: Drive scope missing for {t1_acct}. Run to enable:",

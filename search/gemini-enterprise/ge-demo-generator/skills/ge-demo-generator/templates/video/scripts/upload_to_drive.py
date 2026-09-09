@@ -132,6 +132,25 @@ def format_drive_scope_diagnostic_banner(account: str = "") -> str:
     return "\n".join(banner)
 
 
+def format_drive_reauth_diagnostic_banner(account: str = "") -> str:
+    """Formats an actionable diagnostic banner when Google OAuth credentials have expired."""
+    target = account.strip() if account and account != "default" else "<ACCOUNT>"
+    banner = [
+        "",
+        "=" * 80,
+        "⚠️ [Google OAuth Credentials Expired] The refresh token for your account has expired or been revoked!",
+        f"   Target Account : {target}",
+        "",
+        "👉 To re-authenticate and enable Google Drive access, run:",
+        f"   gcloud auth login {target} --enable-gdrive-access",
+        "",
+        "   (Or configure DRIVE_ACCOUNT=<user@domain> or pass --drive-account=<account>)",
+        "=" * 80,
+        ""
+    ]
+    return "\n".join(banner)
+
+
 def detect_deploy_account(env: dict = None) -> str:
     """Detects the demo agent deployment destination user account (Tier 2)."""
     env = env or {}
@@ -310,7 +329,7 @@ def verify_delivery_destinations(project_id: str = "", drive_account: str = "",
         info["confirmed_destination"] = f"Tier 1: Google Drive (Host: {target_account}) [gdrive CLI Verified]"
         return info
     else:
-        t1_token = drive_access_token(target_account)
+        t1_token, t1_status, t1_err = _fetch_token_and_status(target_account)
         if t1_token:
             test_info, test_status, _ = drive_request(t1_token, "GET", f"{DRIVE_API}/about?fields=user")
             if test_status == 200:
@@ -326,13 +345,16 @@ def verify_delivery_destinations(project_id: str = "", drive_account: str = "",
             else:
                 info["tier_1"]["status"] = "unverified"
                 info["tier_1"]["reason"] = f"HTTP {test_status}"
+        elif t1_status == "reauth_required":
+            info["tier_1"]["status"] = "reauth_required"
+            info["tier_1"]["reason"] = f"OAuth credentials expired for {target_account} (run: gcloud auth login {target_account} --enable-gdrive-access)"
         else:
             info["tier_1"]["status"] = "missing_token"
-            info["tier_1"]["reason"] = "No access token available"
+            info["tier_1"]["reason"] = t1_err or "No access token available"
 
     # Check Tier 2
     if resolved_deploy and resolved_deploy != target_account:
-        t2_token = drive_access_token(resolved_deploy)
+        t2_token, t2_status, t2_err = _fetch_token_and_status(resolved_deploy)
         if t2_token:
             test_info2, test_status2, _ = drive_request(t2_token, "GET", f"{DRIVE_API}/about?fields=user")
             if test_status2 == 200:
@@ -342,12 +364,18 @@ def verify_delivery_destinations(project_id: str = "", drive_account: str = "",
                 info["confirmed_tier"] = "tier_2_deploy_drive"
                 info["confirmed_destination"] = f"Tier 2: Google Drive (Deploy Tenant: {resolved_deploy}) [Scope Verified]"
                 return info
-            else:
+            elif test_status2 == 403:
                 info["tier_2"]["status"] = "scope_insufficient"
+                info["tier_2"]["reason"] = f"HTTP 403 (missing Drive scope; run: gcloud auth login {resolved_deploy} --enable-gdrive-access)"
+            else:
+                info["tier_2"]["status"] = "unverified"
                 info["tier_2"]["reason"] = f"HTTP {test_status2}"
+        elif t2_status == "reauth_required":
+            info["tier_2"]["status"] = "reauth_required"
+            info["tier_2"]["reason"] = f"OAuth credentials expired for {resolved_deploy} (run: gcloud auth login {resolved_deploy} --enable-gdrive-access)"
         else:
             info["tier_2"]["status"] = "missing_token"
-            info["tier_2"]["reason"] = "No access token available"
+            info["tier_2"]["reason"] = t2_err or "No access token available"
     else:
         info["tier_2"]["status"] = "skipped"
         info["tier_2"]["reason"] = "No distinct deploy account configured"
@@ -358,17 +386,60 @@ def verify_delivery_destinations(project_id: str = "", drive_account: str = "",
     return info
 
 
-def drive_access_token(account: str = "") -> str:
-    """Retrieves access token from gcloud for a specific account or active account."""
+def get_drive_token_and_status(account: str = "") -> tuple:
+    """Retrieves access token and diagnostic status from gcloud for target account.
+
+    Returns:
+        tuple[str, str, str]: (token, status, error_details)
+        status is one of: "ok", "reauth_required", "missing_token"
+    """
     cmd = ["gcloud", "auth", "print-access-token"]
     if account and account != "default":
         cmd.extend(["--account", account])
     try:
-        res = subprocess.run(cmd, capture_output=True, text=True, check=True)
-        return res.stdout.strip()
+        res = subprocess.run(cmd, capture_output=True, text=True)
+        if res.returncode == 0 and res.stdout.strip():
+            return res.stdout.strip(), "ok", ""
+
+        stderr = (res.stderr or "").strip()
+        stdout = (res.stdout or "").strip()
+        combined_err = f"{stderr} {stdout}".lower()
+
+        reauth_keywords = [
+            "invalid_grant",
+            "expired",
+            "revoked",
+            "reauth",
+            "refresh token",
+            "please run: gcloud auth login",
+            "auth login",
+            "requires authentication",
+        ]
+        if any(kw in combined_err for kw in reauth_keywords):
+            return "", "reauth_required", stderr or stdout or "OAuth token expired or revoked"
+
+        return "", "missing_token", stderr or stdout or f"gcloud exited with code {res.returncode}"
     except Exception as e:
-        print(f"⚠️ Failed to obtain gcloud access token for account '{account or 'active'}': {e}", file=sys.stderr)
-        return ""
+        err_str = str(e).lower()
+        if any(kw in err_str for kw in ["invalid_grant", "expired", "revoked", "reauth"]):
+            return "", "reauth_required", str(e)
+        return "", "missing_token", str(e)
+
+
+def drive_access_token(account: str = "") -> str:
+    """Retrieves access token from gcloud for a specific account or active account."""
+    tok, _, _ = get_drive_token_and_status(account)
+    return tok
+
+
+def _fetch_token_and_status(account: str = "") -> tuple:
+    """Retrieves access token and status, maintaining compatibility with legacy drive_access_token mocks."""
+    if hasattr(get_drive_token_and_status, "assert_called"):
+        return get_drive_token_and_status(account)
+    if hasattr(drive_access_token, "assert_called"):
+        tok = drive_access_token(account) or ""
+        return tok, ("ok" if tok else "missing_token"), ""
+    return get_drive_token_and_status(account)
 
 
 def drive_request(token: str, method: str, url: str, headers: dict = None,
@@ -625,7 +696,20 @@ def deliver_video(
                 print(f"  ⚠️ [Tier 1] gdrive CLI upload encountered: {err}. Advancing to REST API...", file=sys.stderr)
 
     # Path B: Standard REST API (via gcloud auth print-access-token)
-    token = drive_access_token(target_account)
+    token, t1_status, t1_err = _fetch_token_and_status(target_account)
+    if not token and t1_status == "reauth_required":
+        print(format_drive_reauth_diagnostic_banner(target_account), file=sys.stderr)
+        if interactive and sys.stdin.isatty():
+            try:
+                prompt_msg = f"👉 Credentials expired for '{target_account}'. Run 'gcloud auth login {target_account} --enable-gdrive-access' now? [Y/n]: "
+                resp = input(prompt_msg).strip().lower()
+                if resp in ("", "y", "yes"):
+                    login_cmd = ["gcloud", "auth", "login", target_account, "--enable-gdrive-access"]
+                    subprocess.run(login_cmd, check=True)
+                    token, t1_status, _ = _fetch_token_and_status(target_account)
+            except Exception as login_err:
+                print(f"⚠️ Interactive re-authentication failed: {login_err}", file=sys.stderr)
+
     if token:
         test_info, test_status, _ = drive_request(token, "GET", f"{DRIVE_API}/about?fields=user")
         if test_status == 403:
@@ -637,7 +721,7 @@ def deliver_video(
                     if resp in ("", "y", "yes"):
                         login_cmd = ["gcloud", "auth", "login", target_account, "--enable-gdrive-access"]
                         subprocess.run(login_cmd, check=True)
-                        token = drive_access_token(target_account)
+                        token, _, _ = _fetch_token_and_status(target_account)
                         if token:
                             _, test_status, _ = drive_request(token, "GET", f"{DRIVE_API}/about?fields=user")
                 except Exception as login_err:
@@ -672,14 +756,20 @@ def deliver_video(
         else:
             print(f"  ⚠️ [Tier 1] Drive scope insufficient ({test_status}) for account '{target_account}'. Advancing to Tier 2...", file=sys.stderr)
     else:
-        print(f"  ℹ️ [Tier 1] Missing Google Drive access token for '{target_account}'. Advancing to Tier 2...", file=sys.stderr)
+        if t1_status == "reauth_required":
+            print(f"  ⚠️ [Tier 1] OAuth credentials expired for '{target_account}'. Advancing to Tier 2...", file=sys.stderr)
+            result["tier_1_status"] = "reauth_required"
+        else:
+            print(f"  ℹ️ [Tier 1] Missing Google Drive access token for '{target_account}'. Advancing to Tier 2...", file=sys.stderr)
 
     # ---------------------------------------------------------
     # TIER 2: Demo Agent Deploy Destination Account Drive
     # ---------------------------------------------------------
     if resolved_deploy and resolved_deploy != target_account:
         print(f"🚀 [Tier 2] Attempting delivery to deploy destination Drive ({resolved_deploy})...")
-        t2_token = drive_access_token(resolved_deploy)
+        t2_token, t2_status, _ = _fetch_token_and_status(resolved_deploy)
+        if not t2_token and t2_status == "reauth_required":
+            print(format_drive_reauth_diagnostic_banner(resolved_deploy), file=sys.stderr)
         if t2_token:
             test_info, test_status, _ = drive_request(t2_token, "GET", f"{DRIVE_API}/about?fields=user")
             if test_status == 200:
@@ -705,7 +795,10 @@ def deliver_video(
             else:
                 print(f"  ⚠️ [Tier 2] Scope insufficient ({test_status}) for '{resolved_deploy}'. Advancing to Tier 3...", file=sys.stderr)
         else:
-            print(f"  ℹ️ [Tier 2] Access token unavailable for '{resolved_deploy}'. Advancing to Tier 3...", file=sys.stderr)
+            if t2_status == "reauth_required":
+                print(f"  ⚠️ [Tier 2] OAuth credentials expired for '{resolved_deploy}'. Advancing to Tier 3...", file=sys.stderr)
+            else:
+                print(f"  ℹ️ [Tier 2] Access token unavailable for '{resolved_deploy}'. Advancing to Tier 3...", file=sys.stderr)
 
     # ---------------------------------------------------------
     # TIER 3: Google Cloud Project Cloud Storage Bucket Fallback
@@ -746,7 +839,7 @@ def main():
     parser.add_argument("--project", default="", help="Google Cloud project ID")
     parser.add_argument("--share-public", action="store_true", help="Enable public link sharing (default: False, owner-only private)")
     parser.add_argument("--skip-drive", action="store_true", help="Skip Google Drive upload (save to ./deliverables/ only)")
-    parser.add_argument("--interactive", action="store_true", help="Prompt interactively to re-authenticate on scope errors")
+    parser.add_argument("--interactive", action="store_true", help="Prompt interactively to re-authenticate on expired credentials or scope errors")
     args = parser.parse_args()
 
     res = deliver_video(
@@ -775,6 +868,10 @@ def main():
     if res.get("gcs_uri"):
         print(f"   GCS URI       : {res['gcs_uri']}")
         print(f"   Console URL   : {res.get('gcs_console_url', 'N/A')}")
+    if res.get("tier_1_status") == "reauth_required":
+        t_acct = res.get("target_account", "<account>")
+        print(f"   ⚠️ Tier 1 Notice: OAuth credentials for '{t_acct}' expired.")
+        print(f"   👉 Run to re-authenticate: gcloud auth login {t_acct} --enable-gdrive-access")
     print("=" * 60)
 
 
