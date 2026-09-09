@@ -462,9 +462,19 @@ def format_demo_plan_overview(
         f"   • Tier 3 (Fallback)    : Cloud Storage (gs://{t3_bucket}/)",
         "",
         f"🔒 Confirmed Destination  : {dest_info['confirmed_destination']}",
+    ]
+
+    if dest_info.get("tier_1", {}).get("status") == "scope_insufficient":
+        lines.extend([
+            "",
+            f"💡 Note: Drive scope missing for {t1_acct}. Run to enable:",
+            f"   gcloud auth login {t1_acct} --enable-gdrive-access"
+        ])
+
+    lines.extend([
         "=" * 80,
         ""
-    ]
+    ])
     presentation_text = "\n".join(lines)
 
     return {
@@ -521,7 +531,10 @@ def run_pipeline(args):
             print(f"⚠️ [Typography] System font verification returned non-zero code for '{lang}'. Proceeding with WebFont fallbacks.", file=sys.stderr)
 
     if getattr(args, "skip_drive", False):
-        os.environ["SKIP_DRIVE_UPLOAD"] = "1"
+        os.environ["SKIP_VIDEO_DRIVE_UPLOAD"] = "1"
+    elif os.environ.get("SKIP_DRIVE_UPLOAD", "").strip().lower() in ("1", "true", "yes"):
+        if os.environ.get("SKIP_VIDEO_DRIVE_UPLOAD", "").strip().lower() not in ("1", "true", "yes"):
+            print("ℹ️ Note: SKIP_DRIVE_UPLOAD is present in the environment (from demo asset setup), but video Google Drive delivery remains active.")
 
     work_dir = os.path.abspath(args.work_dir)
     os.makedirs(work_dir, exist_ok=True)
@@ -810,8 +823,10 @@ def run_pipeline(args):
         cmd_deliver.extend(["--drive-folder", args.drive_folder])
     if getattr(args, "share_public", False):
         cmd_deliver.append("--share-public")
-    if getattr(args, "skip_drive", False) or os.environ.get("SKIP_DRIVE_UPLOAD", "").strip().lower() in ("1", "true", "yes"):
+    if getattr(args, "skip_drive", False) or os.environ.get("SKIP_VIDEO_DRIVE_UPLOAD", "").strip().lower() in ("1", "true", "yes"):
         cmd_deliver.append("--skip-drive")
+    if sys.stdin.isatty():
+        cmd_deliver.append("--interactive")
     subprocess.run(cmd_deliver)
 
     print("\n" + "=" * 80)

@@ -46,19 +46,21 @@ def gdrive_cli_available() -> bool:
     return os.path.exists(GDRIVE_BIN) and os.access(GDRIVE_BIN, os.X_OK)
 
 
-def detect_host_drive_account() -> str:
+def detect_host_drive_account(env: dict = None) -> str:
     """Dynamically detects the host execution environment's Google account without hardcoding.
 
     Priority:
     1. Explicit environment variable `DRIVE_ACCOUNT`
-    2. Non-demo user account matching local host username / LDAP
-    3. Corporate user account (@google.com) from `gcloud auth list`
-    4. First non-demo human account in `gcloud auth list`
-    5. Fallback to active gcloud account
+    2. Corporate user account (@google.com) matching local host username / LDAP
+    3. Any corporate user account (@google.com) from `gcloud auth list`
+    4. Active non-service account in `gcloud auth list`
+    5. First non-service account in `gcloud auth list`
+    6. Fallback to active gcloud account or "default"
     """
-    env_acct = os.environ.get("DRIVE_ACCOUNT", "").strip()
+    env = env or {}
+    env_acct = env.get("DRIVE_ACCOUNT") or os.environ.get("DRIVE_ACCOUNT", "")
     if env_acct:
-        return env_acct
+        return env_acct.strip()
 
     # Query gcloud credentialed accounts
     accounts = []
@@ -71,47 +73,63 @@ def detect_host_drive_account() -> str:
         data = json.loads(res.stdout)
         for entry in data:
             acct = entry.get("account", "").strip()
-            status = entry.get("status", "")
-            if status == "ACTIVE":
-                active_acct = acct
+            status = entry.get("status", "").strip().upper()
             if not acct or "@" not in acct:
                 continue
             parts = acct.split("@", 1)[1].lower().split(".")
             if parts[-1] == "com" and len(parts) >= 2 and parts[-2] == "gserviceaccount":
                 continue
+            if status == "ACTIVE":
+                active_acct = acct
             accounts.append(acct)
     except Exception:
         pass
-
-    # Filter out known demo tenant and sandbox domains
-    non_demo_accounts = []
-    for a in accounts:
-        parts = a.split("@", 1)[1].lower().split(".")
-        if len(parts) >= 2 and parts[-1] == "com" and (parts[-2].startswith("alto") or parts[-2] == "example"):
-            continue
-        non_demo_accounts.append(a)
 
     try:
         host_user = getpass.getuser().strip().lower()
     except Exception:
         host_user = ""
 
+    # Priority 2: Account matching host user LDAP
     if host_user:
-        for a in non_demo_accounts:
-            if a.lower().startswith(host_user + "@"):
+        for a in accounts:
+            a_lower = a.lower()
+            if a_lower.startswith(host_user + "@") or a_lower == f"{host_user}@google.com":
                 return a
 
-    corp_accounts = [a for a in non_demo_accounts if a.lower().endswith("@google.com")]
+    # Priority 3: Any corporate @google.com account
+    corp_accounts = [a for a in accounts if a.lower().endswith("@google.com")]
     if corp_accounts:
         return corp_accounts[0]
 
-    if non_demo_accounts:
-        return non_demo_accounts[0]
+    # Priority 4: Active gcloud account (if non-service)
+    if active_acct and active_acct in accounts:
+        return active_acct
 
+    # Priority 5: First available non-service account
     if accounts:
         return accounts[0]
 
     return active_acct or "default"
+
+
+def format_drive_scope_diagnostic_banner(account: str = "") -> str:
+    """Formats an actionable diagnostic banner when Drive OAuth scope is missing (HTTP 403)."""
+    target = account.strip() if account and account != "default" else "<ACCOUNT>"
+    banner = [
+        "",
+        "=" * 80,
+        "⚠️ [Google Drive Scope Missing] The current gcloud credential lacks Drive API scope (HTTP 403)!",
+        f"   Target Account : {target}",
+        "",
+        "👉 To grant Google Drive access to gcloud, run:",
+        f"   gcloud auth login {target} --enable-gdrive-access",
+        "",
+        "   (Or configure DRIVE_ACCOUNT=<user@google.com> or pass --drive-account=<account>)",
+        "=" * 80,
+        ""
+    ]
+    return "\n".join(banner)
 
 
 def detect_deploy_account(env: dict = None) -> str:
@@ -273,7 +291,7 @@ def verify_delivery_destinations(project_id: str = "", drive_account: str = "",
         "confirmed_destination": ""
     }
 
-    env_skip = os.environ.get("SKIP_DRIVE_UPLOAD", "").strip().lower() in ("1", "true", "yes")
+    env_skip = os.environ.get("SKIP_VIDEO_DRIVE_UPLOAD", "").strip().lower() in ("1", "true", "yes")
     if skip_drive or env_skip:
         info["tier_1"]["status"] = "skipped"
         info["tier_1"]["reason"] = "--skip-drive requested"
@@ -302,9 +320,12 @@ def verify_delivery_destinations(project_id: str = "", drive_account: str = "",
                 info["confirmed_tier"] = "tier_1_operator_drive"
                 info["confirmed_destination"] = f"Tier 1: Google Drive (Host: {target_account}) [Scope Verified]"
                 return info
-            else:
+            elif test_status == 403:
                 info["tier_1"]["status"] = "scope_insufficient"
-                info["tier_1"]["reason"] = f"HTTP {test_status} (requires --enable-gdrive-access)"
+                info["tier_1"]["reason"] = f"HTTP 403 (missing Drive scope; run: gcloud auth login {target_account} --enable-gdrive-access)"
+            else:
+                info["tier_1"]["status"] = "unverified"
+                info["tier_1"]["reason"] = f"HTTP {test_status}"
         else:
             info["tier_1"]["status"] = "missing_token"
             info["tier_1"]["reason"] = "No access token available"
@@ -521,7 +542,8 @@ def deliver_video(
     share_public: bool = False,
     project_id: str = "",
     deploy_account: str = "",
-    gcs_bucket: str = ""
+    gcs_bucket: str = "",
+    interactive: bool = False
 ) -> dict:
     """Delivers the rendered MP4 demo video using the 3-Tier Storage Delivery hierarchy.
 
@@ -561,9 +583,9 @@ def deliver_video(
         "upload_status": "pending"
     }
 
-    env_skip = os.environ.get("SKIP_DRIVE_UPLOAD", "").strip().lower() in ("1", "true", "yes")
+    env_skip = os.environ.get("SKIP_VIDEO_DRIVE_UPLOAD", "").strip().lower() in ("1", "true", "yes")
     if skip_drive or env_skip:
-        print("ℹ️ Google Drive upload skipped (SKIP_DRIVE_UPLOAD or --skip-drive). Deliverable preserved locally.")
+        print("ℹ️ Google Drive upload skipped (SKIP_VIDEO_DRIVE_UPLOAD or --skip-drive). Deliverable preserved locally.")
         result["upload_status"] = "skipped"
         return result
 
@@ -606,6 +628,21 @@ def deliver_video(
     token = drive_access_token(target_account)
     if token:
         test_info, test_status, _ = drive_request(token, "GET", f"{DRIVE_API}/about?fields=user")
+        if test_status == 403:
+            print(format_drive_scope_diagnostic_banner(target_account), file=sys.stderr)
+            if interactive and sys.stdin.isatty():
+                try:
+                    prompt_msg = f"👉 Would you like to run 'gcloud auth login {target_account} --enable-gdrive-access' now? [Y/n]: "
+                    resp = input(prompt_msg).strip().lower()
+                    if resp in ("", "y", "yes"):
+                        login_cmd = ["gcloud", "auth", "login", target_account, "--enable-gdrive-access"]
+                        subprocess.run(login_cmd, check=True)
+                        token = drive_access_token(target_account)
+                        if token:
+                            _, test_status, _ = drive_request(token, "GET", f"{DRIVE_API}/about?fields=user")
+                except Exception as login_err:
+                    print(f"⚠️ Interactive authentication failed: {login_err}", file=sys.stderr)
+
         if test_status == 200:
             folder_id = drive_find_folder(token, target_folder_name)
             if not folder_id:
@@ -709,6 +746,7 @@ def main():
     parser.add_argument("--project", default="", help="Google Cloud project ID")
     parser.add_argument("--share-public", action="store_true", help="Enable public link sharing (default: False, owner-only private)")
     parser.add_argument("--skip-drive", action="store_true", help="Skip Google Drive upload (save to ./deliverables/ only)")
+    parser.add_argument("--interactive", action="store_true", help="Prompt interactively to re-authenticate on scope errors")
     args = parser.parse_args()
 
     res = deliver_video(
@@ -724,6 +762,7 @@ def main():
         project_id=args.project,
         deploy_account=args.deploy_account,
         gcs_bucket=args.gcs_bucket,
+        interactive=args.interactive,
     )
     print("\n" + "=" * 60)
     print("🎥 Video Delivery Summary")
