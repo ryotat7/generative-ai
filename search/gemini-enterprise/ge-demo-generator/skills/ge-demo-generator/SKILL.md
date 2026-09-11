@@ -3,10 +3,10 @@ name: ge-demo-generator
 description: Synthesizes and deploys complete, domain-specific Gemini Enterprise demo environments directly to Google Cloud. Use when the user asks to create an AI agent demo for any customer domain (e.g. 'example.com', 'example.co.jp', 'example.de', 'example.fr' - any company, any industry, any region) or business goal, generate realistic BigQuery/Firestore sample datasets, create external demo files (PDF, Excel, scanned images), stage them in Cloud Storage and upload them to the deploying account's Google Drive, scaffold ADK multi-agent architectures with MCP tools and A2UI cards, deploy to Cloud Run, publish to Gemini Enterprise, and generate 7 structured demo prompts in any language. Confirms the requirements interactively and presents a demo architecture & data model plan (Mermaid ER diagram, external file lineage, target project) for approval before anything is deployed. Also triggered by /ge-demo-generator.
 metadata:
   author: Google Cloud Customer Engineering
-  version: 2.20.0
+  version: 2.23.0
 ---
 
-# GE Demo Generator Skill (v2.20.0)
+# GE Demo Generator Skill (v2.23.0)
 
 Synthesizes production-grade, domain-tailored AI agent demo environments using **Gemini 3.8 Flash** for reasoning and **Gemini 3.1 Flash Image** for visual generation, adhering to a strict **6-step infrastructure dependency graph**, rich **A2UI interactive component streaming**, **Google Workspace OAuth authorization**, **external sample files staged in Cloud Storage and, when the credentials carry the Drive scope, in the deploying account's Google Drive**, **7 structured demo prompts**, **automated browser video recording & Remotion highlight reel delivery to Google Drive**, and **global multilingual localization (i18n/l10n)**.
 
@@ -750,6 +750,17 @@ Follow the optimized dependency sequence with local pre-flight checks and fast b
    `MANAGED_AGENT_ID` / `MANAGED_AGENT_SKILLS_SOURCE` when the autonomous agent is on.
    `$SECRETS_FLAG` binds `OAUTH_CLIENT_ID` / `OAUTH_CLIENT_SECRET` from Secret Manager when
    either Workspace flag is set.
+
+   > [!IMPORTANT]
+   > **If this deploy is refused by an organization policy, it is not a build failure and
+   > there is nothing to debug in the container.** `constraints/run.allowedVPCEgress` and
+   > `constraints/run.allowedBinaryAuthorizationPolicies` reject a service for an annotation
+   > it never set, before Cloud Build is asked for anything. `setup_and_deploy.sh` prints
+   > which constraint refused it and the flags that satisfy it; set `GE_RUN_NETWORK`,
+   > `GE_RUN_SUBNET`, `GE_RUN_VPC_EGRESS` and `GE_RUN_BINAUTHZ` in `.env` and re-run. Do not
+   > loosen `--ingress` or drop `--no-allow-unauthenticated` to get around it - that changes
+   > the security posture of the demo and does not address either constraint. Full
+   > explanation in `references/deployment_and_iam.md` § Step 4.
 
 5. **Step 5/6: Finalize Background Task Infrastructure & Post-Deploy Wire-up**:
    *Background runs travel over Cloud Tasks, not an in-process self-call: the service deploys

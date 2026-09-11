@@ -101,7 +101,7 @@ const CONFIG = {
   GITHUB_TOKEN: SCRIPT_PROPS.getProperty('GITHUB_TOKEN'),
   MAX_RETRIES: 3,
   RETRY_DELAY_MS: 1000,
-  APP_VERSION: 'v12.20-public',
+  APP_VERSION: 'v12.21-public',
   // Agent-template source: the generated setup script fetches the static
   // Python/JSON template files (agent_template/ in the repo) at run time.
   // TEMPLATE_REF may be a branch name (default 'main'): it is resolved to a
@@ -2936,6 +2936,13 @@ Requirements:
     // org policies, and a mid-script prompt would stall unattended runs. We
     // only explain the cause and print the manual remedy for operators who
     // DO hold org-policy admin, then continue without the viewer.
+    //
+    // v12.21: allowedIngress is not the only one. A gen2 function IS a Cloud
+    // Run service, so the same hardened baseline that pins
+    // constraints/run.allowedVPCEgress and
+    // constraints/run.allowedBinaryAuthorizationPolicies rejects this deploy
+    // too - and for a reason that reads as nothing at all in the raw log,
+    // since the violation is an annotation the deploy never mentioned.
     firestoreCommands += `    if grep -q "run.allowedIngress" "\$VIEWER_LOG"; then\n`;
     firestoreCommands += `      echo ""\n`;
     firestoreCommands += `      echo "    🚧 Cause: org policy 'constraints/run.allowedIngress' does not allow public ingress, which the browser-based Data Viewer needs."\n`;
@@ -2943,6 +2950,20 @@ Requirements:
     firestoreCommands += `      echo "       you can allow it and re-run this script:"\n`;
     firestoreCommands += `      echo "         gcloud resource-manager org-policies allow constraints/run.allowedIngress all --project=$PROJECT_ID"\n`;
     firestoreCommands += `      echo "       (Viewer access itself stays IAP-protected - it is never public even with ingress allowed.)"\n`;
+    firestoreCommands += `    fi\n`;
+    firestoreCommands += `    if grep -q "run.allowedVPCEgress" "\$VIEWER_LOG"; then\n`;
+    firestoreCommands += `      echo ""\n`;
+    firestoreCommands += `      echo "    🚧 Cause: org policy 'constraints/run.allowedVPCEgress' requires every Cloud Run service"\n`;
+    firestoreCommands += `      echo "       (a gen2 function is one) to declare VPC egress. A service with no VPC attached counts"\n`;
+    firestoreCommands += `      echo "       as a violation, and --vpc-egress is refused unless a network arrives with it, so the fix"\n`;
+    firestoreCommands += `      echo "       is --network/--subnet/--vpc-egress together - or an org-policy exception."\n`;
+    firestoreCommands += `    fi\n`;
+    firestoreCommands += `    if grep -q "run.allowedBinaryAuthorizationPolicies" "\$VIEWER_LOG"; then\n`;
+    firestoreCommands += `      echo ""\n`;
+    firestoreCommands += `      echo "    🚧 Cause: org policy 'constraints/run.allowedBinaryAuthorizationPolicies' requires the service"\n`;
+    firestoreCommands += `      echo "       to name an allowed policy: --binary-authorization=ALLOWED_POLICY."\n`;
+    firestoreCommands += `      echo "       Read the allowed values with:"\n`;
+    firestoreCommands += `      echo "         gcloud resource-manager org-policies describe constraints/run.allowedBinaryAuthorizationPolicies --project=$PROJECT_ID --effective"\n`;
     firestoreCommands += `    fi\n`;
     firestoreCommands += `    echo "    ℹ️  This is an optional component and does NOT affect the agent's functionality."\n`;
     firestoreCommands += `    echo "    ℹ️  The agent will work normally without the Data Viewer."\n`;
@@ -6119,6 +6140,39 @@ ${ (params.importedMcpList || []).some(m => m.type === 'remote' && (m.auth_type 
     echo "---------------------------------------------------------"
     cat "$DEPLOY_LOG"
     echo "---------------------------------------------------------"
+    # An org-policy refusal reads like a build failure and is not one: it is
+    # decided by the control plane before Cloud Build is asked for anything. The
+    # message names the constraint and stops there, leaving out the two facts
+    # that are the entire fix - that the violation is the ABSENCE of an
+    # annotation, and that --vpc-egress is rejected unless a network arrives
+    # with it.
+    if grep -q "run.allowed" "$DEPLOY_LOG"; then
+      echo ""
+      echo "   🚧 This is an organization policy refusal, not a build failure."
+      echo "      The deploy asked for nothing unusual; it failed because it left an"
+      echo "      annotation UNSET that this project's policy requires to be set."
+      if grep -q "run.allowedVPCEgress" "$DEPLOY_LOG"; then
+        echo "      • constraints/run.allowedVPCEgress"
+        echo "        Every service has to declare VPC egress, there is no value meaning"
+        echo "        'no VPC', and --vpc-egress is refused unless a network arrives with"
+        echo "        it - so satisfying this means attaching one:"
+        echo "          --network=NETWORK --subnet=SUBNET --vpc-egress=ALLOWED_VALUE"
+        echo "        With --vpc-egress=all-traffic the subnet also needs Private Google"
+        echo "        Access, or the container cannot reach googleapis.com at all."
+      fi
+      if grep -q "run.allowedBinaryAuthorizationPolicies" "$DEPLOY_LOG"; then
+        echo "      • constraints/run.allowedBinaryAuthorizationPolicies"
+        echo "        The service has to name an allowed Binary Authorization policy:"
+        echo "          --binary-authorization=ALLOWED_POLICY"
+      fi
+      echo "      Read the values this project allows (works without the Org Policy API):"
+      echo "        gcloud resource-manager org-policies describe constraints/run.allowedVPCEgress --project=$PROJECT_ID --effective"
+      echo "        gcloud resource-manager org-policies describe constraints/run.allowedBinaryAuthorizationPolicies --project=$PROJECT_ID --effective"
+      echo "      Then add those flags to the gcloud run deploy in this script, or ask an"
+      echo "      Organization Policy Administrator to grant this project an exception."
+      echo "      The deploying account usually cannot read or change the policy itself,"
+      echo "      because it is inherited from a folder."
+    fi
     rm -f "$DEPLOY_LOG"
     exit 1
   fi
