@@ -101,7 +101,7 @@ const CONFIG = {
   GITHUB_TOKEN: SCRIPT_PROPS.getProperty('GITHUB_TOKEN'),
   MAX_RETRIES: 3,
   RETRY_DELAY_MS: 1000,
-  APP_VERSION: 'v12.21-public',
+  APP_VERSION: 'v12.23-public',
   // Agent-template source: the generated setup script fetches the static
   // Python/JSON template files (agent_template/ in the repo) at run time.
   // TEMPLATE_REF may be a branch name (default 'main'): it is resolved to a
@@ -2942,8 +2942,34 @@ Requirements:
     // constraints/run.allowedVPCEgress and
     // constraints/run.allowedBinaryAuthorizationPolicies rejects this deploy
     // too - and for a reason that reads as nothing at all in the raw log,
-    // since the violation is an annotation the deploy never mentioned.
-    firestoreCommands += `    if grep -q "run.allowedIngress" "\$VIEWER_LOG"; then\n`;
+    // v12.22: in real failure logs the error arrives like this:
+    //
+    //   ERROR: (gcloud.functions.deploy) ResponseError: status=[400], code=[Ok],
+    //   message=[The request has violated multiple Org Policies. Please refer
+    //   to the respective violations for more information.]
+    //
+    // No constraint name appears anywhere in that log, so all three greps
+    // below used to miss - on the exact deploys this guidance was written for,
+    // leaving the operator with a bare 400. When the log says only that a
+    // policy refused it, explain all three: the summary cannot tell us which.
+    // Plain '...' strings, not template literals: none of these lines
+    // interpolates anything, and a backtick that buys no interpolation is pure
+    // risk in the file whose escaping layering is this project's first cause of
+    // production failures. In single quotes the emitted bash reads $VIEWER_LOG
+    // with no escaping at all - one layer less than the neighbours below.
+    firestoreCommands += '    VIEWER_OP_NAMED=0\n';
+    firestoreCommands += '    if grep -q "run.allowed" "$VIEWER_LOG"; then\n';
+    firestoreCommands += '      VIEWER_OP_NAMED=1\n';
+    firestoreCommands += '    fi\n';
+    firestoreCommands += '    VIEWER_OP_ALL=0\n';
+    firestoreCommands += '    if [ "$VIEWER_OP_NAMED" = "0" ] && grep -qi "org polic" "$VIEWER_LOG"; then\n';
+    firestoreCommands += '      VIEWER_OP_ALL=1\n';
+    firestoreCommands += '      echo ""\n';
+    firestoreCommands += '      echo "    🚧 An organization policy refused the Data Viewer. gcloud reported that as a"\n';
+    firestoreCommands += '      echo "       summary without naming the constraint, so all three that can reject this"\n';
+    firestoreCommands += '      echo "       service are explained below - at least one of them applies."\n';
+    firestoreCommands += '    fi\n';
+    firestoreCommands += '    if [ "$VIEWER_OP_ALL" = "1" ] || grep -q "run.allowedIngress" "$VIEWER_LOG"; then\n';
     firestoreCommands += `      echo ""\n`;
     firestoreCommands += `      echo "    🚧 Cause: org policy 'constraints/run.allowedIngress' does not allow public ingress, which the browser-based Data Viewer needs."\n`;
     firestoreCommands += `      echo "       The Data Viewer is skipped in this environment. If you hold Organization Policy Administrator on this project"\n`;
@@ -2951,14 +2977,14 @@ Requirements:
     firestoreCommands += `      echo "         gcloud resource-manager org-policies allow constraints/run.allowedIngress all --project=$PROJECT_ID"\n`;
     firestoreCommands += `      echo "       (Viewer access itself stays IAP-protected - it is never public even with ingress allowed.)"\n`;
     firestoreCommands += `    fi\n`;
-    firestoreCommands += `    if grep -q "run.allowedVPCEgress" "\$VIEWER_LOG"; then\n`;
+    firestoreCommands += `    if [ "\$VIEWER_OP_ALL" = "1" ] || grep -q "run.allowedVPCEgress" "\$VIEWER_LOG"; then\n`;
     firestoreCommands += `      echo ""\n`;
     firestoreCommands += `      echo "    🚧 Cause: org policy 'constraints/run.allowedVPCEgress' requires every Cloud Run service"\n`;
     firestoreCommands += `      echo "       (a gen2 function is one) to declare VPC egress. A service with no VPC attached counts"\n`;
     firestoreCommands += `      echo "       as a violation, and --vpc-egress is refused unless a network arrives with it, so the fix"\n`;
     firestoreCommands += `      echo "       is --network/--subnet/--vpc-egress together - or an org-policy exception."\n`;
     firestoreCommands += `    fi\n`;
-    firestoreCommands += `    if grep -q "run.allowedBinaryAuthorizationPolicies" "\$VIEWER_LOG"; then\n`;
+    firestoreCommands += `    if [ "\$VIEWER_OP_ALL" = "1" ] || grep -q "run.allowedBinaryAuthorizationPolicies" "\$VIEWER_LOG"; then\n`;
     firestoreCommands += `      echo ""\n`;
     firestoreCommands += `      echo "    🚧 Cause: org policy 'constraints/run.allowedBinaryAuthorizationPolicies' requires the service"\n`;
     firestoreCommands += `      echo "       to name an allowed policy: --binary-authorization=ALLOWED_POLICY."\n`;
@@ -4841,32 +4867,41 @@ grant_roles_fast "$PROJECT_ID" "serviceAccount" "\$DISCOVERY_ENGINE_SA" "roles/r
 
 # --- Dashboards: signBlob self-binding + non-public bucket for interactive HTML dashboards ---
 # The runtime SA has no key file, so V4 signed URLs are minted via the IAM signBlob API.
-# That requires the SA to hold token-creator on ITSELF (a resource-level binding on the
-# SA, not a project-level role -- so it cannot go through grant_roles_fast).
+# Resource-level self-binding is tried first (least privilege); if restricted by policy
+# or IAM on the SA resource, falls back to project-level grant.
 echo "🔐 Granting signBlob (token-creator) on the runtime SA to itself..."
 if gcloud iam service-accounts add-iam-policy-binding "\$COMPUTE_SA" \
     --member="serviceAccount:\$COMPUTE_SA" \
     --role="roles/iam.serviceAccountTokenCreator" \
     --project="$PROJECT_ID" --quiet >/dev/null 2>&1; then
   echo "  ✅ signBlob self-binding granted."
+elif gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+    --member="serviceAccount:\$COMPUTE_SA" \
+    --role="roles/iam.serviceAccountTokenCreator" \
+    --condition=None --quiet >/dev/null 2>&1; then
+  echo "  ✅ signBlob granted at project level (fallback from resource-level self-binding)."
 else
-  echo "  ⚠️  Failed to grant signBlob self-binding (V4 signed URLs may fail)."
+  echo "  ⚠️  Failed to grant signBlob (V4 signed URLs may fail)."
 fi
 
 # --- Cloud Tasks: actAs self-binding ---
 # Enqueueing a task whose http_request carries an oidc_token requires
 # iam.serviceAccounts.actAs on the impersonated SA. The runtime names ITSELF in
-# the token, so the binding is again resource-level on the SA and cannot go
-# through grant_roles_fast. Without it every enqueue fails and the worker
-# silently falls back to the localhost self-call.
+# the token. Resource-level self-binding is tried first (least privilege); if
+# restricted by policy or IAM on the SA resource, falls back to project-level grant.
 echo "🔐 Granting actAs (serviceAccountUser) on the runtime SA to itself..."
 if gcloud iam service-accounts add-iam-policy-binding "\$COMPUTE_SA" \
     --member="serviceAccount:\$COMPUTE_SA" \
     --role="roles/iam.serviceAccountUser" \
     --project="$PROJECT_ID" --quiet >/dev/null 2>&1; then
   echo "  ✅ actAs self-binding granted."
+elif gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+    --member="serviceAccount:\$COMPUTE_SA" \
+    --role="roles/iam.serviceAccountUser" \
+    --condition=None --quiet >/dev/null 2>&1; then
+  echo "  ✅ actAs granted at project level (fallback from resource-level self-binding)."
 else
-  echo "  ⚠️  Failed to grant actAs self-binding (background tasks fall back to the in-container dispatch)."
+  echo "  ⚠️  Failed to grant actAs (background tasks fall back to the in-container dispatch)."
 fi
 
 echo "🪣 Creating non-public dashboards bucket: \$DASH_BUCKET ..."

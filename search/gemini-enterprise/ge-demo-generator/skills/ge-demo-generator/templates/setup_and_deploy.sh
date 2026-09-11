@@ -682,12 +682,26 @@ grant_roles_fast() {
   grant_roles_fast "$PROJECT_ID" "serviceAccount" "$SCHED_SA" "roles/pubsub.publisher"
   grant_roles_fast "$PROJECT_ID" "serviceAccount" "$DISCOVERY_ENGINE_SA" "roles/run.invoker"
   # Signed download links are minted through the IAM signBlob API rather than a
-  # key file, which needs the runtime SA to impersonate ITSELF. Project-level
-  # roles cannot express that; it has to be a binding on the SA resource.
+  # key file, which needs the runtime SA to impersonate ITSELF. Resource-level
+  # self-binding is tried first; if restricted, falls back to project-level.
   gcloud iam service-accounts add-iam-policy-binding "$COMPUTE_SA" \
     --member="serviceAccount:$COMPUTE_SA" \
     --role="roles/iam.serviceAccountTokenCreator" \
-    --project="$PROJECT_ID" --quiet >/dev/null 2>&1 || true
+    --project="$PROJECT_ID" --quiet >/dev/null 2>&1 ||
+    gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+      --member="serviceAccount:$COMPUTE_SA" \
+      --role="roles/iam.serviceAccountTokenCreator" \
+      --condition=None --quiet >/dev/null 2>&1 || true
+
+  # Cloud Tasks worker dispatch requires actAs on the runtime SA.
+  gcloud iam service-accounts add-iam-policy-binding "$COMPUTE_SA" \
+    --member="serviceAccount:$COMPUTE_SA" \
+    --role="roles/iam.serviceAccountUser" \
+    --project="$PROJECT_ID" --quiet >/dev/null 2>&1 ||
+    gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+      --member="serviceAccount:$COMPUTE_SA" \
+      --role="roles/iam.serviceAccountUser" \
+      --condition=None --quiet >/dev/null 2>&1 || true
   if [ ! -z "$GCP_ACCOUNT" ] && [ "$GCP_ACCOUNT" != "Unknown" ]; then
     grant_roles_fast "$PROJECT_ID" "user" "$GCP_ACCOUNT" \
       "roles/mcp.toolUser" "roles/serviceusage.serviceUsageConsumer" "roles/storage.admin" \

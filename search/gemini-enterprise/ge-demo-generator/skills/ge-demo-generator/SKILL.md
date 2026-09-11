@@ -3,10 +3,10 @@ name: ge-demo-generator
 description: Synthesizes and deploys complete, domain-specific Gemini Enterprise demo environments directly to Google Cloud. Use when the user asks to create an AI agent demo for any customer domain (e.g. 'example.com', 'example.co.jp', 'example.de', 'example.fr' - any company, any industry, any region) or business goal, generate realistic BigQuery/Firestore sample datasets, create external demo files (PDF, Excel, scanned images), stage them in Cloud Storage and upload them to the deploying account's Google Drive, scaffold ADK multi-agent architectures with MCP tools and A2UI cards, deploy to Cloud Run, publish to Gemini Enterprise, and generate 7 structured demo prompts in any language. Confirms the requirements interactively and presents a demo architecture & data model plan (Mermaid ER diagram, external file lineage, target project) for approval before anything is deployed. Also triggered by /ge-demo-generator.
 metadata:
   author: Google Cloud Customer Engineering
-  version: 2.23.0
+  version: 2.25.0
 ---
 
-# GE Demo Generator Skill (v2.23.0)
+# GE Demo Generator Skill (v2.25.0)
 
 Synthesizes production-grade, domain-tailored AI agent demo environments using **Gemini 3.8 Flash** for reasoning and **Gemini 3.1 Flash Image** for visual generation, adhering to a strict **6-step infrastructure dependency graph**, rich **A2UI interactive component streaming**, **Google Workspace OAuth authorization**, **external sample files staged in Cloud Storage and, when the credentials carry the Drive scope, in the deploying account's Google Drive**, **7 structured demo prompts**, **automated browser video recording & Remotion highlight reel delivery to Google Drive**, and **global multilingual localization (i18n/l10n)**.
 
@@ -188,6 +188,11 @@ carrying no Drive scope, which is what a plain `gcloud auth login` gives you) me
 demo will have no Google Drive copy of the sample documents at all**. That is a fact the
 brief has to state, not discover at deploy time — see brief sections 3 and 5. It is also one
 command to fix, so say it now: `gcloud auth login --enable-gdrive-access --no-launch-browser` (using `--no-launch-browser` since an agentic IDE terminal usually has no local browser), then re-read.
+
+The demo video follows the same account. `generate_and_upload_external_files.py` records the
+Drive owner in `drive_upload_summary.json`, and the video delivery reads it, so the recording
+lands in the same folder as the documents it is a recording of. See
+`skills/ge-demo-video/SKILL.md`, Phase 6, for the full precedence.
 
 #### Multi-OS Google Cloud Authentication & Setup Protocol
 Before proceeding with deployment, verify both user CLI authentication (`gcloud auth print-access-token`) and Application Default Credentials (`gcloud auth application-default print-access-token`). If missing or expired:
