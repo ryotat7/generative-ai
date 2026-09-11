@@ -1027,7 +1027,7 @@ def classify_delivery(result: dict) -> tuple:
     subprocess.run() told it nothing. An orchestrating agent read that banner,
     concluded the video was in Drive, and never offered the recovery step the
     skill defines - while the operator had no Drive link at all. A delivery has
-    to be gradeable from outside the process, so this is the single place that
+    to be verifiable from outside the process, so this is the single place that
     decides what happened.
     """
     status = result.get("upload_status", "")
